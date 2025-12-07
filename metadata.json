@@ -1,0 +1,8 @@
+{
+  "name": "SonarAI",
+  "description": "A high-contrast, AI-powered spatial navigation assistant for visually impaired users using Gemini 3 Pro.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
