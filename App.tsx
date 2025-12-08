@@ -29,10 +29,10 @@ const App: React.FC = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
-  // Audio Playback Ref to avoid overlapping TTS
+  // Audio Playback Ref
   const audioContextRef = useRef<AudioContext | null>(null);
 
-  // Initialize Audio Context on first interaction
+  // Initialize Audio
   const initAudio = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -42,21 +42,21 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Voice Output Handling ---
+  // --- Voice Output ---
   const speak = useCallback(async (text: string, useHighQuality = false) => {
     if (!text) return;
     
-    // For navigation loop, we prefer SpeechSynthesis for 0 latency
+    // Fast path for navigation loop
     if (!useHighQuality && window.speechSynthesis) {
-      window.speechSynthesis.cancel(); // Stop previous
+      window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.2; // Slightly faster for navigation
+      utterance.rate = 1.3;
       utterance.pitch = 1.0;
       window.speechSynthesis.speak(utterance);
       return;
     }
 
-    // High Quality Gemini TTS (for detailed queries)
+    // Quality path for queries
     if (useHighQuality) {
        const audioBase64 = await generateSpeech(text);
        if (audioBase64 && audioContextRef.current) {
@@ -73,7 +73,6 @@ const App: React.FC = () => {
            source.start(0);
          } catch (e) {
            console.error("Audio decode error", e);
-           // Fallback
            const utterance = new SpeechSynthesisUtterance(text);
            window.speechSynthesis.speak(utterance);
          }
@@ -91,50 +90,49 @@ const App: React.FC = () => {
 
     const video = webcamRef.current.video;
     
-    // Match canvas size to video display size
+    // Match visual size
     canvas.width = video.clientWidth;
     canvas.height = video.clientHeight;
     
-    // Clear previous
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Helper: Draw Box
     const drawBox = (box: number[], color: string, label: string) => {
        const [ymin, xmin, ymax, xmax] = box;
-       // Coordinates are 0-1000. Convert to pixels.
        const x = (xmin / 1000) * canvas.width;
        const y = (ymin / 1000) * canvas.height;
        const w = ((xmax - xmin) / 1000) * canvas.width;
        const h = ((ymax - ymin) / 1000) * canvas.height;
 
+       // Tactical Corners
+       const lineLen = Math.min(w, h) * 0.2;
        ctx.strokeStyle = color;
-       ctx.lineWidth = 4;
-       ctx.strokeRect(x, y, w, h);
+       ctx.lineWidth = 3;
+       
+       // Top Left
+       ctx.beginPath(); ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y); ctx.stroke();
+       // Top Right
+       ctx.beginPath(); ctx.moveTo(x + w - lineLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + lineLen); ctx.stroke();
+       // Bottom Right
+       ctx.beginPath(); ctx.moveTo(x + w, y + h - lineLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lineLen, y + h); ctx.stroke();
+       // Bottom Left
+       ctx.beginPath(); ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen); ctx.stroke();
 
-       // Label background
+       // Label
        ctx.fillStyle = color;
-       const textWidth = ctx.measureText(label).width;
-       ctx.fillRect(x, y - 24, textWidth + 10, 24);
-
-       // Label text
+       ctx.globalAlpha = 0.8;
+       ctx.fillRect(x, y - 22, ctx.measureText(label).width + 10, 22);
+       ctx.globalAlpha = 1.0;
        ctx.fillStyle = "#000000";
-       ctx.font = "bold 16px Arial";
-       ctx.fillText(label, x + 5, y - 6);
+       ctx.font = "bold 14px Courier New";
+       ctx.fillText(label.toUpperCase(), x + 5, y - 6);
     };
 
-    // Draw Hazards (RED)
-    lastResponse.visual_debug.hazards.forEach(h => {
-        drawBox(h.box_2d, '#FF0000', h.label);
-    });
-
-    // Draw Safe Path (GREEN)
-    lastResponse.visual_debug.safe_path.forEach(p => {
-        drawBox(p.box_2d, '#00FF00', p.label);
-    });
+    lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
+    lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label));
 
   }, [lastResponse]);
 
-  // --- The Loop (Navigation) ---
+  // --- Navigation Loop ---
   const runNavigationLoop = useCallback(async () => {
     if (appState !== AppState.SCANNING || isProcessing || !webcamRef.current) return;
 
@@ -142,21 +140,16 @@ const App: React.FC = () => {
     if (!imageSrc) return;
 
     setIsProcessing(true);
-    playBeep(880, 50); // High pitch short beep for "Scanning"
+    // Silent internal beep or very low volume if preferred, keeping it for rhythm
+    // playBeep(880, 20); 
 
-    // Extract Base64
     const base64Image = imageSrc.split(',')[1];
 
     try {
       const data = await analyzeFrame(base64Image);
       setLastResponse(data);
-      
-      // Haptic/Audio Feedback (Pro Feature: Spatial Audio)
       playSonarPing(data.stereo_pan);
-      
-      // Voice Output
       speak(data.navigation_command, false);
-
     } catch (error) {
       console.error("Loop Error", error);
     } finally {
@@ -164,23 +157,18 @@ const App: React.FC = () => {
     }
   }, [appState, isProcessing, speak]);
 
-  // Interval Effect
   useEffect(() => {
     let intervalId: any;
     if (appState === AppState.SCANNING) {
-      // Immediate first run
       runNavigationLoop();
-      // Loop every 3s
-      intervalId = setInterval(runNavigationLoop, 3000);
+      intervalId = setInterval(runNavigationLoop, 3500); // Slightly longer interval to allow speech
     }
     return () => clearInterval(intervalId);
   }, [appState, runNavigationLoop]);
 
-
-  // --- Voice Command Input ---
+  // --- Input ---
   const startListening = async () => {
-    if (appState === AppState.SCANNING) setAppState(AppState.IDLE); // Pause scanning
-    
+    if (appState === AppState.SCANNING) setAppState(AppState.IDLE);
     setAppState(AppState.LISTENING);
     playBeep(600, 100);
 
@@ -189,10 +177,8 @@ const App: React.FC = () => {
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
 
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
-      };
-
+      mediaRecorderRef.current.ondataavailable = (event) => audioChunksRef.current.push(event.data);
+      
       mediaRecorderRef.current.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
         const base64Audio = await blobToBase64(audioBlob);
@@ -204,14 +190,13 @@ const App: React.FC = () => {
           const imageSrc = webcamRef.current.getScreenshot();
           if (imageSrc) {
              const base64Image = imageSrc.split(',')[1];
-             speak("Analyzing...", false);
-             const response = await analyzeFrame(base64Image, `User asked: "${query}". Answer them specifically and guide them.`);
+             speak("Processing", false);
+             const response = await analyzeFrame(base64Image, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
              setLastResponse(response);
-             // Use High Quality TTS for this interaction
              speak(response.navigation_command + " " + response.reasoning_summary, true);
           }
         } else {
-            speak("I didn't hear that.", false);
+            speak("Unclear. Try again.", false);
         }
         setAppState(AppState.IDLE);
       };
@@ -230,108 +215,128 @@ const App: React.FC = () => {
     }
   };
 
-  // --- UI Handlers ---
   const toggleNavigation = () => {
     initAudio();
     if (appState === AppState.SCANNING) {
       setAppState(AppState.IDLE);
-      speak("Sonar Paused", false);
+      speak("System Paused", false);
       setLastResponse(null);
     } else {
       setAppState(AppState.SCANNING);
-      speak("Sonar Active. Scanning.", false);
+      speak("System Active. Scanning.", false);
     }
   };
 
-  // Determine Background Color for "Emergency Stop"
-  const getBackgroundColor = () => {
-    if (lastResponse?.safety_status === 'STOP') return 'bg-sonar-alert animate-pulse';
-    return 'bg-sonar-black';
+  // --- UI Helpers ---
+  const getStatusColor = () => {
+    if (lastResponse?.safety_status === 'STOP') return 'text-sonar-alert';
+    if (lastResponse?.safety_status === 'CAUTION') return 'text-sonar-yellow';
+    return 'text-sonar-safe';
+  };
+
+  const getAlertBg = () => {
+    if (lastResponse?.safety_status === 'STOP') return 'bg-red-900/50 animate-pulse';
+    return '';
   };
 
   return (
-    <div className={`relative h-screen w-screen text-sonar-yellow overflow-hidden font-sans transition-colors duration-200 ${getBackgroundColor()}`}>
+    <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none ${getAlertBg()}`}>
       
-      {/* Camera Feed & Canvas Overlay */}
-      <div className="absolute inset-0 z-0 bg-black flex items-center justify-center">
+      {/* 1. Viewport Layer */}
+      <div className="absolute inset-4 z-0 border-2 border-zinc-800 bg-black rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black">
          <Webcam
            ref={webcamRef}
            audio={false}
            screenshotFormat="image/jpeg"
            videoConstraints={{ facingMode: "environment" }}
-           className="absolute w-full h-full object-contain opacity-80"
+           className="w-full h-full object-contain opacity-90"
          />
-         <canvas 
-           ref={canvasRef}
-           className="absolute w-full h-full object-contain pointer-events-none"
-         />
+         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
+         
+         {/* Scanning Animation Line */}
+         {appState === AppState.SCANNING && (
+           <div className="absolute left-0 w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,102,0.8)] animate-scan pointer-events-none" />
+         )}
+
+         {/* Center Crosshair */}
+         <div className="absolute text-sonar-white/30 text-2xl pointer-events-none">+</div>
       </div>
 
-      {/* Main Touch Interface */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-between p-4">
+      {/* 2. HUD Layer */}
+      <div className="absolute inset-0 z-20 flex flex-col justify-between p-6 pointer-events-none">
         
-        {/* Top Status Bar */}
-        <div className="bg-black/80 p-4 border-b-4 border-sonar-yellow">
-          <h1 className="text-4xl font-black tracking-widest uppercase">SonarAI</h1>
-          <div className="flex justify-between items-center mt-2">
-            <span className={`text-2xl font-bold ${appState === AppState.SCANNING ? 'animate-pulse text-sonar-safe' : 'text-gray-500'}`}>
-              {appState === AppState.SCANNING ? '● SCANNING' : appState === AppState.LISTENING ? '● LISTENING' : 'PAUSED'}
-            </span>
+        {/* Top Header */}
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
+            <p className="text-xs text-zinc-500 font-mono tracking-widest">SPATIAL NAV ENGINE v1.0</p>
+          </div>
+          
+          <div className="flex flex-col items-end">
+             <div className="flex items-center gap-2 bg-black/80 px-3 py-1 rounded border border-zinc-800">
+                <div className={`w-3 h-3 rounded-full ${appState === AppState.SCANNING ? 'bg-sonar-safe animate-pulse' : 'bg-zinc-600'}`}></div>
+                <span className="text-sm font-mono font-bold text-sonar-white">{appState}</span>
+             </div>
              {lastResponse && (
-                <span className={`text-3xl font-black px-4 py-1 ${
-                  lastResponse.safety_status === 'STOP' ? 'bg-sonar-alert text-black' : 
-                  lastResponse.safety_status === 'CAUTION' ? 'bg-sonar-yellow text-black' : 'bg-sonar-safe text-black'
-                }`}>
-                  {lastResponse.safety_status}
-                </span>
+               <div className={`mt-2 text-xl font-black font-mono tracking-widest ${getStatusColor()}`}>
+                 [{lastResponse.safety_status}]
+               </div>
              )}
           </div>
         </div>
 
-        {/* Center Text Feedback (Massive) */}
-        <div className="flex-grow flex items-center justify-center pointer-events-none">
-           {lastResponse ? (
-             <div className="bg-black/70 p-6 text-center rounded-xl max-w-lg">
-               <p className="text-5xl font-bold leading-tight drop-shadow-md text-white">
-                 {lastResponse.navigation_command}
-               </p>
-               {appState === AppState.PROCESSING_QUERY && (
-                 <p className="text-2xl mt-4 animate-bounce text-sonar-white">Thinking...</p>
-               )}
+        {/* Dynamic Instruction Card */}
+        <div className="flex justify-center items-center">
+           {lastResponse && (
+             <div className="bg-black/80 backdrop-blur-sm border-l-4 border-sonar-yellow px-6 py-4 max-w-sm rounded-r-lg shadow-lg transform transition-all duration-300">
+                <p className="text-3xl font-bold text-white leading-tight">
+                   {lastResponse.navigation_command}
+                </p>
+                {appState === AppState.PROCESSING_QUERY && (
+                  <p className="text-sm font-mono text-sonar-yellow mt-2 animate-pulse">:: PROCESSING QUERY ::</p>
+                )}
              </div>
-           ) : (
-             appState === AppState.IDLE && (
-               <p className="text-4xl font-bold text-center opacity-50">Tap to Start</p>
-             )
+           )}
+           {appState === AppState.IDLE && !lastResponse && (
+              <div className="text-zinc-600 font-mono text-sm animate-pulse">SYSTEM STANDBY</div>
            )}
         </div>
 
-        {/* Bottom Controls */}
-        <div className="flex flex-col gap-4 mb-8">
-           {/* Voice Command Button */}
+        {/* 3. Control Layer (Pointer Events Enabled) */}
+        <div className="grid grid-cols-5 gap-4 pointer-events-auto h-24 mb-4">
+           {/* Voice Command (Hold) */}
            <button
              onMouseDown={startListening}
              onMouseUp={stopListening}
              onTouchStart={startListening}
              onTouchEnd={stopListening}
              disabled={appState === AppState.PROCESSING_QUERY}
-             className="w-full bg-sonar-white text-black py-8 text-3xl font-bold rounded-2xl active:scale-95 transition-transform border-4 border-sonar-yellow"
-           >
-             {appState === AppState.LISTENING ? 'LISTENING...' : 'HOLD TO ASK'}
-           </button>
-
-           {/* Toggle Button */}
-           <button
-             onClick={toggleNavigation}
-             className={`w-full py-12 text-4xl font-black rounded-2xl border-4 transition-colors ${
-               appState === AppState.SCANNING 
-               ? 'bg-sonar-black text-sonar-alert border-sonar-alert hover:bg-sonar-alert hover:text-black' 
-               : 'bg-sonar-yellow text-black border-sonar-white hover:bg-white'
+             className={`col-span-2 rounded-xl font-bold text-lg flex flex-col items-center justify-center border-2 transition-all active:scale-95 ${
+               appState === AppState.LISTENING 
+               ? 'bg-sonar-white text-black border-sonar-white shadow-[0_0_20px_rgba(255,255,255,0.4)]' 
+               : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:border-sonar-white'
              }`}
            >
-             {appState === AppState.SCANNING ? 'STOP' : 'START NAVIGATION'}
+             <span className="text-2xl mb-1">{appState === AppState.LISTENING ? '◉' : '○'}</span>
+             <span className="text-xs font-mono">HOLD TO SPEAK</span>
+           </button>
+
+           {/* Space */}
+           <div className="col-span-1"></div>
+
+           {/* Toggle Power */}
+           <button
+             onClick={toggleNavigation}
+             className={`col-span-2 rounded-xl font-black text-xl flex items-center justify-center border-2 transition-all active:scale-95 shadow-lg ${
+               appState === AppState.SCANNING
+               ? 'bg-sonar-alert text-black border-sonar-alert shadow-[0_0_20px_rgba(255,51,51,0.5)]'
+               : 'bg-sonar-safe text-black border-sonar-safe shadow-[0_0_20px_rgba(0,255,102,0.3)]'
+             }`}
+           >
+             {appState === AppState.SCANNING ? 'STOP' : 'START'}
            </button>
         </div>
+
       </div>
     </div>
   );

@@ -10,26 +10,45 @@
         theme: {
           extend: {
             colors: {
-              'sonar-black': '#000000',
-              'sonar-yellow': '#FFFF00',
-              'sonar-white': '#FFFFFF',
-              'sonar-alert': '#FF0000',
-              'sonar-safe': '#00FF00',
+              'sonar-black': '#050505',
+              'sonar-panel': '#111111',
+              'sonar-yellow': '#FFD700',
+              'sonar-white': '#E0E0E0',
+              'sonar-alert': '#FF3333',
+              'sonar-safe': '#00FF66',
             },
             fontFamily: {
-              sans: ['Arial', 'Helvetica', 'sans-serif'], // Simple, readable fonts
+              sans: ['Arial', 'Helvetica', 'sans-serif'],
+              mono: ['Courier New', 'Courier', 'monospace'],
+            },
+            animation: {
+              'scan': 'scan 2s linear infinite',
+              'pulse-fast': 'pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            },
+            keyframes: {
+              scan: {
+                '0%': { top: '0%', opacity: '0' },
+                '10%': { opacity: '1' },
+                '90%': { opacity: '1' },
+                '100%': { top: '100%', opacity: '0' },
+              }
             }
           },
         },
       }
     </script>
     <style>
-      /* Disable selection for touch interface */
       body {
         user-select: none;
         -webkit-user-select: none;
-        background-color: black;
+        background-color: #050505;
         overflow: hidden;
+      }
+      /* Tech Grid Background */
+      .bg-grid {
+        background-size: 40px 40px;
+        background-image: linear-gradient(to right, #1a1a1a 1px, transparent 1px),
+                          linear-gradient(to bottom, #1a1a1a 1px, transparent 1px);
       }
     </style>
   <script type="importmap">
