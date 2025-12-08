@@ -64,7 +64,7 @@ const App: React.FC = () => {
     if (!useHighQuality && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.3;
+      utterance.rate = 1.1; // Slightly lowered from 1.3 for clearer, more natural speech
       utterance.pitch = 1.0;
       utterance.lang = currentLang.locale; // Set correct locale
       window.speechSynthesis.speak(utterance);
@@ -226,9 +226,16 @@ const App: React.FC = () => {
       const data = await analyzeFrame(base64Image, currentLang.name);
       setLastResponse(data);
       
-      // Combine command and reasoning for clear, contextual feedback
-      const voiceMessage = data.reasoning_summary 
+      // Calculate word count to ensure conciseness
+      const combinedText = data.reasoning_summary 
         ? `${data.navigation_command}. ${data.reasoning_summary}`
+        : data.navigation_command;
+      
+      const wordCount = combinedText.split(/\s+/).filter(w => w.length > 0).length;
+
+      // Logic: Speak full message if short, otherwise just command
+      const voiceMessage = (wordCount <= 10 && data.reasoning_summary) 
+        ? combinedText 
         : data.navigation_command;
 
       if (data.safety_status === 'STOP') {
