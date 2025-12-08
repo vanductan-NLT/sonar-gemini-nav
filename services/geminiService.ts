@@ -17,8 +17,8 @@ const SYSTEM_INSTRUCTION = `
 **OUTPUT FORMAT (Strict JSON Only):**
 {
   "safety_status": "SAFE" | "CAUTION" | "STOP",
-  "reasoning_summary": "Detected wet floor sign directly in path.",
-  "navigation_command": "Short, imperative voice command (Max 8 words). E.g., 'Stop. Wet floor sign ahead. Go left.'",
+  "reasoning_summary": "Concise context (Max 12 words). E.g., 'Chair blocking center path.'",
+  "navigation_command": "Short, imperative voice command (Max 8 words). E.g., 'Stop. Wet floor ahead. Go left.'",
   "stereo_pan": 0.0, // A float between -1.0 (Left) and 1.0 (Right) representing where the clear path or target is. 0.0 is Center.
   "visual_debug": {
     "hazards": [ {"label": "Bag", "box_2d": [ymin, xmin, ymax, xmax]} ], // Coordinates must be normalized 0-1000

@@ -183,18 +183,23 @@ const App: React.FC = () => {
       const data = await analyzeFrame(base64Image);
       setLastResponse(data);
       
+      // Combine command and reasoning for clear, contextual feedback
+      const voiceMessage = data.reasoning_summary 
+        ? `${data.navigation_command}. ${data.reasoning_summary}`
+        : data.navigation_command;
+
       if (data.safety_status === 'STOP') {
         setEmergencyLatch(true); // Latch emergency mode
         playBeep(1000, 500, 'sawtooth'); // Alarm sound
-        speak(data.navigation_command, false);
+        speak(voiceMessage, false);
       } else if (data.safety_status === 'CAUTION') {
         // Distinct sound for caution (Double pulse, lower pitch)
         playCautionSound(data.stereo_pan);
-        speak(data.navigation_command, false);
+        speak(voiceMessage, false);
       } else {
         // Safe status: Standard high-pitch ping
         playSonarPing(data.stereo_pan);
-        speak(data.navigation_command, false);
+        speak(voiceMessage, false);
       }
       
     } catch (error) {

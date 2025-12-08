@@ -43,12 +43,13 @@ export const playCautionSound = (pan: number) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     
-    // Triangle wave for a "warning" timbre (softer than sawtooth, rougher than sine)
-    osc.type = 'triangle';
+    // Square wave for a distinct "digital alert" timbre
+    // Distinct from Sine (Safe) and Sawtooth (Stop)
+    osc.type = 'square';
     
-    // Lower pitch for caution (300Hz -> 250Hz slide)
-    osc.frequency.setValueAtTime(300, startTime + offset);
-    osc.frequency.linearRampToValueAtTime(250, startTime + offset + 0.15);
+    // Mid-range pitch (550Hz) dropping to 450Hz - noticeable but not ear-piercing
+    osc.frequency.setValueAtTime(550, startTime + offset);
+    osc.frequency.linearRampToValueAtTime(450, startTime + offset + 0.1);
 
     // Spatial Panning
     let sourceNode: AudioNode = osc;
@@ -63,18 +64,19 @@ export const playCautionSound = (pan: number) => {
     sourceNode.connect(gain);
     gain.connect(ctx.destination);
 
-    // Envelope (Double Pulse)
+    // Envelope (Short, punchy blip)
+    // Lower volume (0.1) because square waves are naturally perceived as louder
     gain.gain.setValueAtTime(0, startTime + offset);
-    gain.gain.linearRampToValueAtTime(0.2, startTime + offset + 0.05);
-    gain.gain.linearRampToValueAtTime(0, startTime + offset + 0.15);
+    gain.gain.linearRampToValueAtTime(0.1, startTime + offset + 0.02);
+    gain.gain.linearRampToValueAtTime(0, startTime + offset + 0.1);
 
     osc.start(startTime + offset);
     osc.stop(startTime + offset + 0.15);
   };
 
-  // Schedule two pulses: "Bup-Bup"
+  // Schedule two pulses: "Bip-Bip" pattern for caution
   playPulse(0);
-  playPulse(0.2);
+  playPulse(0.15);
 };
 
 export const playSonarPing = (pan: number) => {
