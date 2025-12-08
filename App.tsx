@@ -23,14 +23,15 @@ interface LanguageOption {
   code: string; // for Gemini
   locale: string; // for Web Speech API
   label: string; // UI Button label
+  flag: string; // Emoji flag
 }
 
 const LANGUAGES: LanguageOption[] = [
-  { name: 'English', code: 'en', locale: 'en-US', label: 'ENG' },
-  { name: 'Spanish', code: 'es', locale: 'es-ES', label: 'ESP' },
-  { name: 'French', code: 'fr', locale: 'fr-FR', label: 'FRA' },
-  { name: 'German', code: 'de', locale: 'de-DE', label: 'DEU' },
-  { name: 'Japanese', code: 'ja', locale: 'ja-JP', label: 'JPN' },
+  { name: 'English', code: 'en', locale: 'en-US', label: 'ENG', flag: '🇺🇸' },
+  { name: 'Spanish', code: 'es', locale: 'es-ES', label: 'ESP', flag: '🇪🇸' },
+  { name: 'French', code: 'fr', locale: 'fr-FR', label: 'FRA', flag: '🇫🇷' },
+  { name: 'German', code: 'de', locale: 'de-DE', label: 'DEU', flag: '🇩🇪' },
+  { name: 'Japanese', code: 'ja', locale: 'ja-JP', label: 'JPN', flag: '🇯🇵' },
 ];
 
 const App: React.FC = () => {
@@ -469,7 +470,10 @@ const App: React.FC = () => {
                     : 'border-zinc-800 text-zinc-400 bg-zinc-900/50 hover:border-sonar-white hover:text-sonar-white'
                 }`}
               >
-                <span>{lang.name.toUpperCase()}</span>
+                <div className="flex items-center gap-4">
+                    <span className="text-2xl">{lang.flag}</span>
+                    <span>{lang.name.toUpperCase()}</span>
+                </div>
                 {index === langIndex && <span>●</span>}
               </button>
             ))}
