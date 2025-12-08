@@ -21,8 +21,8 @@ const SYSTEM_INSTRUCTION = `
   "navigation_command": "Short, imperative voice command (Max 8 words). E.g., 'Stop. Wet floor sign ahead. Go left.'",
   "stereo_pan": 0.0, // A float between -1.0 (Left) and 1.0 (Right) representing where the clear path or target is. 0.0 is Center.
   "visual_debug": {
-    "hazards": [ {"label": "Bag", "box_2d": [ymin, xmin, ymax, xmax]} ], 
-    "safe_path": [ {"label": "Path", "box_2d": [ymin, xmin, ymax, xmax]} ]
+    "hazards": [ {"label": "Bag", "box_2d": [ymin, xmin, ymax, xmax]} ], // Coordinates must be normalized 0-1000
+    "safe_path": [ {"label": "Path", "box_2d": [ymin, xmin, ymax, xmax]} ] // Coordinates must be normalized 0-1000
   }
 }
 `;
@@ -66,7 +66,7 @@ const schema = {
 
 export const analyzeFrame = async (base64Image: string, customPrompt?: string): Promise<SonarResponse> => {
   try {
-    const prompt = customPrompt || "Analyze this scene for navigation safety.";
+    const prompt = customPrompt || "Analyze this scene for navigation safety. Return boxes in [ymin, xmin, ymax, xmax] format scaled 0-1000.";
     
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview",

@@ -25,6 +25,7 @@ const App: React.FC = () => {
   
   // Refs
   const webcamRef = useRef<Webcam>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
@@ -80,6 +81,58 @@ const App: React.FC = () => {
     }
   }, []);
 
+  // --- Canvas Drawing (Judge's View) ---
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !lastResponse || !webcamRef.current?.video) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const video = webcamRef.current.video;
+    
+    // Match canvas size to video display size
+    canvas.width = video.clientWidth;
+    canvas.height = video.clientHeight;
+    
+    // Clear previous
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Helper: Draw Box
+    const drawBox = (box: number[], color: string, label: string) => {
+       const [ymin, xmin, ymax, xmax] = box;
+       // Coordinates are 0-1000. Convert to pixels.
+       const x = (xmin / 1000) * canvas.width;
+       const y = (ymin / 1000) * canvas.height;
+       const w = ((xmax - xmin) / 1000) * canvas.width;
+       const h = ((ymax - ymin) / 1000) * canvas.height;
+
+       ctx.strokeStyle = color;
+       ctx.lineWidth = 4;
+       ctx.strokeRect(x, y, w, h);
+
+       // Label background
+       ctx.fillStyle = color;
+       const textWidth = ctx.measureText(label).width;
+       ctx.fillRect(x, y - 24, textWidth + 10, 24);
+
+       // Label text
+       ctx.fillStyle = "#000000";
+       ctx.font = "bold 16px Arial";
+       ctx.fillText(label, x + 5, y - 6);
+    };
+
+    // Draw Hazards (RED)
+    lastResponse.visual_debug.hazards.forEach(h => {
+        drawBox(h.box_2d, '#FF0000', h.label);
+    });
+
+    // Draw Safe Path (GREEN)
+    lastResponse.visual_debug.safe_path.forEach(p => {
+        drawBox(p.box_2d, '#00FF00', p.label);
+    });
+
+  }, [lastResponse]);
 
   // --- The Loop (Navigation) ---
   const runNavigationLoop = useCallback(async () => {
@@ -98,7 +151,7 @@ const App: React.FC = () => {
       const data = await analyzeFrame(base64Image);
       setLastResponse(data);
       
-      // Haptic/Audio Feedback
+      // Haptic/Audio Feedback (Pro Feature: Spatial Audio)
       playSonarPing(data.stereo_pan);
       
       // Voice Output
@@ -190,68 +243,29 @@ const App: React.FC = () => {
     }
   };
 
-  // Render Helpers
-  const renderOverlay = () => {
-    if (!lastResponse) return null;
-    
-    // Helper to scale box coordinates [ymin, xmin, ymax, xmax] (0-1000) to %
-    // Assuming Gemini 2D point returns usually normalized 0-1000 or 0-1.
-    // The prompt implies a 2D box. Let's assume normalized 0-1 for simplicity, or scale if needed.
-    // Standard Gemini detection is usually 0-1000. Let's normalize to 0-100%
-    
-    const normalize = (val: number) => (val / 1000) * 100;
-
-    return (
-      <div className="absolute inset-0 pointer-events-none z-10">
-        {lastResponse.visual_debug.hazards.map((h, i) => {
-             const [ymin, xmin, ymax, xmax] = h.box_2d;
-             return (
-               <div key={`haz-${i}`} 
-                    className="absolute border-4 border-sonar-alert"
-                    style={{
-                      top: `${normalize(ymin)}%`,
-                      left: `${normalize(xmin)}%`,
-                      height: `${normalize(ymax - ymin)}%`,
-                      width: `${normalize(xmax - xmin)}%`
-                    }}>
-                    <span className="bg-sonar-alert text-black font-bold text-lg p-1">{h.label}</span>
-               </div>
-             )
-        })}
-        {lastResponse.visual_debug.safe_path.map((p, i) => {
-             const [ymin, xmin, ymax, xmax] = p.box_2d;
-             return (
-               <div key={`path-${i}`} 
-                    className="absolute border-4 border-dashed border-sonar-safe opacity-50"
-                    style={{
-                      top: `${normalize(ymin)}%`,
-                      left: `${normalize(xmin)}%`,
-                      height: `${normalize(ymax - ymin)}%`,
-                      width: `${normalize(xmax - xmin)}%`
-                    }}>
-               </div>
-             )
-        })}
-      </div>
-    )
+  // Determine Background Color for "Emergency Stop"
+  const getBackgroundColor = () => {
+    if (lastResponse?.safety_status === 'STOP') return 'bg-sonar-alert animate-pulse';
+    return 'bg-sonar-black';
   };
 
   return (
-    <div className="relative h-screen w-screen bg-sonar-black text-sonar-yellow overflow-hidden font-sans">
+    <div className={`relative h-screen w-screen text-sonar-yellow overflow-hidden font-sans transition-colors duration-200 ${getBackgroundColor()}`}>
       
-      {/* Camera Feed */}
-      <div className="absolute inset-0 z-0 opacity-80">
+      {/* Camera Feed & Canvas Overlay */}
+      <div className="absolute inset-0 z-0 bg-black flex items-center justify-center">
          <Webcam
            ref={webcamRef}
            audio={false}
            screenshotFormat="image/jpeg"
            videoConstraints={{ facingMode: "environment" }}
-           className="h-full w-full object-cover"
+           className="absolute w-full h-full object-contain opacity-80"
+         />
+         <canvas 
+           ref={canvasRef}
+           className="absolute w-full h-full object-contain pointer-events-none"
          />
       </div>
-
-      {/* Visual Debug Overlay */}
-      {renderOverlay()}
 
       {/* Main Touch Interface */}
       <div className="absolute inset-0 z-20 flex flex-col justify-between p-4">
@@ -277,8 +291,8 @@ const App: React.FC = () => {
         {/* Center Text Feedback (Massive) */}
         <div className="flex-grow flex items-center justify-center pointer-events-none">
            {lastResponse ? (
-             <div className="bg-black/70 p-6 text-center rounded-xl">
-               <p className="text-5xl font-bold leading-tight drop-shadow-md">
+             <div className="bg-black/70 p-6 text-center rounded-xl max-w-lg">
+               <p className="text-5xl font-bold leading-tight drop-shadow-md text-white">
                  {lastResponse.navigation_command}
                </p>
                {appState === AppState.PROCESSING_QUERY && (
