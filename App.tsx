@@ -131,7 +131,7 @@ const App: React.FC = () => {
 
     if (!lastResponse) return;
 
-    const drawBox = (box: number[], color: string, label: string) => {
+    const drawBox = (box: number[], color: string, label: string, fillOpacity = 0.15) => {
        const [ymin, xmin, ymax, xmax] = box;
        const x = (xmin / 1000) * canvas.width;
        const y = (ymin / 1000) * canvas.height;
@@ -139,7 +139,7 @@ const App: React.FC = () => {
        const h = ((ymax - ymin) / 1000) * canvas.height;
 
        // 1. Draw Fill (Semi-transparent)
-       ctx.globalAlpha = 0.15;
+       ctx.globalAlpha = fillOpacity;
        ctx.fillStyle = color;
        ctx.fillRect(x, y, w, h);
        ctx.globalAlpha = 1.0;
@@ -194,11 +194,15 @@ const App: React.FC = () => {
     };
 
     if (lastResponse.visual_debug?.hazards) {
-      lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
+      lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label, 0.15));
     }
     if (lastResponse.visual_debug?.safe_path) {
-      // Explicitly label the green box as 'Safe Path' or localized equivalent if model returns it
-      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label || 'Safe Path'));
+      lastResponse.visual_debug.safe_path.forEach(p => {
+        // Ensure "SAFE PATH" label is used if model returns generic "Path" or empty, but allow localized labels (e.g. Camino) to pass through
+        let label = p.label || 'SAFE PATH';
+        if (label.toUpperCase() === 'PATH') label = 'SAFE PATH';
+        drawBox(p.box_2d, '#00FF66', label, 0.3); // Higher opacity (0.3) for clear visibility
+      });
     }
 
   }, [lastResponse]);

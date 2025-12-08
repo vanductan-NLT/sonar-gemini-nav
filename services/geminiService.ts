@@ -22,7 +22,7 @@ const SYSTEM_INSTRUCTION = `
   "stereo_pan": 0.0, // A float between -1.0 (Left) and 1.0 (Right) representing where the clear path or target is. 0.0 is Center.
   "visual_debug": {
     "hazards": [ {"label": "Bag", "box_2d": [ymin, xmin, ymax, xmax]} ], // Coordinates must be normalized 0-1000
-    "safe_path": [ {"label": "Path", "box_2d": [ymin, xmin, ymax, xmax]} ] // Coordinates must be normalized 0-1000
+    "safe_path": [ {"label": "Safe Path", "box_2d": [ymin, xmin, ymax, xmax]} ] // Coordinates must be normalized 0-1000
   }
 }
 `;
