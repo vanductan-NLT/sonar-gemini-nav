@@ -39,6 +39,9 @@ export const playSonarPing = (pan: number) => {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   
+  // Explicitly set to sine for a pure sonar ping sound
+  osc.type = 'sine';
+  
   // Use StereoPanner if supported
   let nodeToConnectToGain: AudioNode = osc;
   
@@ -48,6 +51,13 @@ export const playSonarPing = (pan: number) => {
     panner.pan.setValueAtTime(safePan, ctx.currentTime);
     osc.connect(panner);
     nodeToConnectToGain = panner;
+  } else {
+    // Fallback for browsers without StereoPanner (connect directly)
+    osc.connect(gain); 
+    // Note: nodeToConnectToGain is already osc, but we need to skip the panner step
+    // Since we can't pan, we just play mono.
+    // Logic fix: if panner exists, osc->panner->gain. If not, osc->gain.
+    nodeToConnectToGain = osc;
   }
 
   // Sonar "Ping" sound: High pitch dropping slightly

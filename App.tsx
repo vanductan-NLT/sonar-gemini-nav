@@ -171,6 +171,7 @@ const App: React.FC = () => {
         playBeep(1000, 500, 'sawtooth'); // Alarm sound
         speak(data.navigation_command, false);
       } else {
+        // Use stereo_pan to provide directional audio feedback (Left/Right/Center)
         playSonarPing(data.stereo_pan);
         speak(data.navigation_command, false);
       }
