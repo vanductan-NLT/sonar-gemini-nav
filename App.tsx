@@ -163,34 +163,56 @@ const App: React.FC = () => {
        ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen);
        ctx.stroke();
 
-       // 4. Draw Label Background
+       // 4. Label Calculations
        const fontSize = 14;
        ctx.font = `bold ${fontSize}px Courier New`;
-       const textMetrics = ctx.measureText(label.toUpperCase());
+       const text = label.toUpperCase();
+       const textMetrics = ctx.measureText(text);
+       const paddingX = 8;
+       const paddingY = 6;
        const textWidth = textMetrics.width;
-       const labelHeight = 24;
-       const padding = 6;
+       const labelHeight = fontSize + (paddingY * 2);
+       const labelWidth = textWidth + (paddingX * 2);
        
-       // Calculate Label Position (Smart Positioning)
+       // 5. Smart Positioning Logic
+       // Constraint 1: Horizontal Safety
        let labelX = x;
-       let labelY = y - labelHeight; // Default: Above box
-       
-       // Handle Top Edge Clipping: If label is off-screen top, move inside box
-       if (labelY < 0) {
-         labelY = y; 
+       // Prevent overflowing right edge
+       if (labelX + labelWidth > canvas.width) {
+          labelX = canvas.width - labelWidth;
        }
-       
-       // Handle Right Edge Clipping
-       if (labelX + textWidth + (padding * 2) > canvas.width) {
-          labelX = canvas.width - (textWidth + (padding * 2));
+       // Prevent overflowing left edge
+       if (labelX < 0) {
+          labelX = 0;
        }
 
-       ctx.fillStyle = color;
-       ctx.fillRect(labelX, labelY, textWidth + (padding * 2), labelHeight);
+       // Constraint 2: Vertical Safety
+       // Prefer placing label ABOVE the box
+       let labelY = y - labelHeight; 
+
+       // If top placement goes off-screen, place INSIDE at the top
+       if (labelY < 0) {
+         labelY = y;
+       }
        
-       // 5. Draw Label Text
+       // If we are really close to bottom edge (rare for top-of-box coord), ensure we don't clip bottom
+       if (labelY + labelHeight > canvas.height) {
+           labelY = canvas.height - labelHeight;
+       }
+
+       // 6. Draw Label Background
+       ctx.fillStyle = color;
+       // Add shadow for better legibility against video
+       ctx.shadowColor = "rgba(0,0,0,0.8)";
+       ctx.shadowBlur = 4;
+       ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
+       ctx.shadowBlur = 0; // Reset
+       
+       // 7. Draw Label Text
        ctx.fillStyle = "#000000";
-       ctx.fillText(label.toUpperCase(), labelX + padding, labelY + 17);
+       ctx.textBaseline = 'middle';
+       // Center text vertically in the label box
+       ctx.fillText(text, labelX + paddingX, labelY + (labelHeight / 2) + 1);
     };
 
     if (lastResponse.visual_debug?.hazards) {

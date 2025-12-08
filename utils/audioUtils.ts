@@ -43,13 +43,14 @@ export const playCautionSound = (pan: number) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     
-    // Square wave for a distinct "digital alert" timbre
-    // Distinct from Sine (Safe) and Sawtooth (Stop)
-    osc.type = 'square';
+    // Triangle wave: Richer than sine, smoother than square/sawtooth
+    // This fits "Distinct but less alarming than STOP"
+    osc.type = 'triangle';
     
-    // Mid-range pitch (550Hz) dropping to 450Hz - noticeable but not ear-piercing
-    osc.frequency.setValueAtTime(550, startTime + offset);
-    osc.frequency.linearRampToValueAtTime(450, startTime + offset + 0.1);
+    // Pitch Slide: 600Hz down to 300Hz
+    // Indicates "warning/negative" movement but in mid-range
+    osc.frequency.setValueAtTime(600, startTime + offset);
+    osc.frequency.exponentialRampToValueAtTime(300, startTime + offset + 0.15);
 
     // Spatial Panning
     let sourceNode: AudioNode = osc;
@@ -58,25 +59,28 @@ export const playCautionSound = (pan: number) => {
       panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), startTime + offset);
       osc.connect(panner);
       sourceNode = panner;
+    } else {
+        // Fallback for browsers without StereoPanner
+        sourceNode = osc;
     }
 
     // Connect chain
     sourceNode.connect(gain);
     gain.connect(ctx.destination);
 
-    // Envelope (Short, punchy blip)
-    // Lower volume (0.1) because square waves are naturally perceived as louder
+    // Envelope (Quick warning blip)
+    // Volume 0.15 is balanced between Safe (0.3 sine) and Stop (sawtooth)
     gain.gain.setValueAtTime(0, startTime + offset);
-    gain.gain.linearRampToValueAtTime(0.1, startTime + offset + 0.02);
-    gain.gain.linearRampToValueAtTime(0, startTime + offset + 0.1);
+    gain.gain.linearRampToValueAtTime(0.15, startTime + offset + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + offset + 0.15);
 
     osc.start(startTime + offset);
-    osc.stop(startTime + offset + 0.15);
+    osc.stop(startTime + offset + 0.2);
   };
 
-  // Schedule two pulses: "Bip-Bip" pattern for caution
+  // Double pulse pattern "Bup-Bup" for noticeable attention
   playPulse(0);
-  playPulse(0.15);
+  playPulse(0.18);
 };
 
 export const playSonarPing = (pan: number) => {
