@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { analyzeFrame, transcribeAudio, generateSpeech } from './services/geminiService';
-import { playBeep, playSonarPing, getAudioContext } from './utils/audioUtils';
+import { playBeep, playSonarPing, playCautionSound, getAudioContext } from './utils/audioUtils';
 import { SonarResponse, AppState } from './types';
 
 // Helper for converting blobs to base64
@@ -170,8 +170,12 @@ const App: React.FC = () => {
         setEmergencyLatch(true); // Latch emergency mode
         playBeep(1000, 500, 'sawtooth'); // Alarm sound
         speak(data.navigation_command, false);
+      } else if (data.safety_status === 'CAUTION') {
+        // Distinct sound for caution (Double pulse, lower pitch)
+        playCautionSound(data.stereo_pan);
+        speak(data.navigation_command, false);
       } else {
-        // Use stereo_pan to provide directional audio feedback (Left/Right/Center)
+        // Safe status: Standard high-pitch ping
         playSonarPing(data.stereo_pan);
         speak(data.navigation_command, false);
       }

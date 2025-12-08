@@ -32,6 +32,51 @@ export const playBeep = (freq: number = 440, duration: number = 100, type: Oscil
   osc.stop(ctx.currentTime + duration / 1000);
 };
 
+export const playCautionSound = (pan: number) => {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  const startTime = ctx.currentTime;
+
+  // Helper to play a single pulse
+  const playPulse = (offset: number) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    
+    // Triangle wave for a "warning" timbre (softer than sawtooth, rougher than sine)
+    osc.type = 'triangle';
+    
+    // Lower pitch for caution (300Hz -> 250Hz slide)
+    osc.frequency.setValueAtTime(300, startTime + offset);
+    osc.frequency.linearRampToValueAtTime(250, startTime + offset + 0.15);
+
+    // Spatial Panning
+    let sourceNode: AudioNode = osc;
+    if (ctx.createStereoPanner) {
+      const panner = ctx.createStereoPanner();
+      panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), startTime + offset);
+      osc.connect(panner);
+      sourceNode = panner;
+    }
+
+    // Connect chain
+    sourceNode.connect(gain);
+    gain.connect(ctx.destination);
+
+    // Envelope (Double Pulse)
+    gain.gain.setValueAtTime(0, startTime + offset);
+    gain.gain.linearRampToValueAtTime(0.2, startTime + offset + 0.05);
+    gain.gain.linearRampToValueAtTime(0, startTime + offset + 0.15);
+
+    osc.start(startTime + offset);
+    osc.stop(startTime + offset + 0.15);
+  };
+
+  // Schedule two pulses: "Bup-Bup"
+  playPulse(0);
+  playPulse(0.2);
+};
+
 export const playSonarPing = (pan: number) => {
   const ctx = getAudioContext();
   if (!ctx) return;
@@ -52,11 +97,8 @@ export const playSonarPing = (pan: number) => {
     osc.connect(panner);
     nodeToConnectToGain = panner;
   } else {
-    // Fallback for browsers without StereoPanner (connect directly)
-    osc.connect(gain); 
-    // Note: nodeToConnectToGain is already osc, but we need to skip the panner step
-    // Since we can't pan, we just play mono.
-    // Logic fix: if panner exists, osc->panner->gain. If not, osc->gain.
+    // Fallback logic handled by variable assignment;
+    // We only connect osc directly to gain if panner isn't used below.
     nodeToConnectToGain = osc;
   }
 
