@@ -17,12 +17,31 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   });
 };
 
+// Language Configuration
+interface LanguageOption {
+  name: string;
+  code: string; // for Gemini
+  locale: string; // for Web Speech API
+  label: string; // UI Button label
+}
+
+const LANGUAGES: LanguageOption[] = [
+  { name: 'English', code: 'en', locale: 'en-US', label: 'ENG' },
+  { name: 'Spanish', code: 'es', locale: 'es-ES', label: 'ESP' },
+  { name: 'French', code: 'fr', locale: 'fr-FR', label: 'FRA' },
+  { name: 'German', code: 'de', locale: 'de-DE', label: 'DEU' },
+  { name: 'Japanese', code: 'ja', locale: 'ja-JP', label: 'JPN' },
+];
+
 const App: React.FC = () => {
   // State
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [lastResponse, setLastResponse] = useState<SonarResponse | null>(null);
   const [isProcessingState, setIsProcessingState] = useState(false); // For UI only
   const [emergencyLatch, setEmergencyLatch] = useState(false);
+  const [langIndex, setLangIndex] = useState(0); // Default to English
+
+  const currentLang = LANGUAGES[langIndex];
   
   // Refs
   const webcamRef = useRef<Webcam>(null);
@@ -46,6 +65,7 @@ const App: React.FC = () => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.3;
       utterance.pitch = 1.0;
+      utterance.lang = currentLang.locale; // Set correct locale
       window.speechSynthesis.speak(utterance);
       return;
     }
@@ -69,11 +89,20 @@ const App: React.FC = () => {
          } catch (e) {
            console.error("Audio decode error", e);
            const utterance = new SpeechSynthesisUtterance(text);
+           utterance.lang = currentLang.locale;
            window.speechSynthesis.speak(utterance);
          }
        }
     }
-  }, []);
+  }, [currentLang.locale]);
+
+  // --- Language Toggle ---
+  const toggleLanguage = () => {
+    const nextIndex = (langIndex + 1) % LANGUAGES.length;
+    setLangIndex(nextIndex);
+    const newLang = LANGUAGES[nextIndex];
+    speak(newLang.name); // Announce new language
+  };
 
   // --- Canvas Drawing (Judge's View) ---
   useEffect(() => {
@@ -159,8 +188,8 @@ const App: React.FC = () => {
       lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
     }
     if (lastResponse.visual_debug?.safe_path) {
-      // Explicitly label the green box as 'Safe Path'
-      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', 'Safe Path'));
+      // Explicitly label the green box as 'Safe Path' or localized equivalent if model returns it
+      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label || 'Safe Path'));
     }
 
   }, [lastResponse]);
@@ -180,7 +209,8 @@ const App: React.FC = () => {
     const base64Image = imageSrc.split(',')[1];
 
     try {
-      const data = await analyzeFrame(base64Image);
+      // Pass current language name to analysis
+      const data = await analyzeFrame(base64Image, currentLang.name);
       setLastResponse(data);
       
       // Combine command and reasoning for clear, contextual feedback
@@ -208,7 +238,7 @@ const App: React.FC = () => {
       isProcessingRef.current = false;
       setIsProcessingState(false);
     }
-  }, [appState, speak, emergencyLatch]);
+  }, [appState, speak, emergencyLatch, currentLang.name]);
 
   useEffect(() => {
     let intervalId: any;
@@ -239,14 +269,16 @@ const App: React.FC = () => {
         const base64Audio = await blobToBase64(audioBlob);
         
         setAppState(AppState.PROCESSING_QUERY);
-        const query = await transcribeAudio(base64Audio);
+        // Pass current language name to transcription
+        const query = await transcribeAudio(base64Audio, currentLang.name);
         
         if (query && webcamRef.current) {
           const imageSrc = webcamRef.current.getScreenshot();
           if (imageSrc) {
              const base64Image = imageSrc.split(',')[1];
              speak("Processing", false);
-             const response = await analyzeFrame(base64Image, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
+             // Pass current language name to analysis
+             const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
              setLastResponse(response);
              speak(response.navigation_command + " " + response.reasoning_summary, true);
           }
@@ -349,10 +381,20 @@ const App: React.FC = () => {
       <div className="absolute inset-0 z-20 flex flex-col justify-between p-6 pointer-events-none">
         
         {/* Top Header */}
-        <div className="flex justify-between items-start">
+        <div className="flex justify-between items-start pointer-events-auto">
           <div>
-            <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
-            <p className="text-xs text-zinc-500 font-mono tracking-widest">SPATIAL NAV ENGINE v1.0</p>
+            <div className="flex items-center gap-3">
+               <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
+               
+               {/* Language Toggle Button */}
+               <button 
+                 onClick={toggleLanguage}
+                 className="bg-zinc-800/80 border border-zinc-600 text-sonar-white font-mono text-xs px-2 py-1 rounded hover:bg-zinc-700 active:scale-95 transition-all"
+               >
+                 [{currentLang.label}]
+               </button>
+            </div>
+            <p className="text-xs text-zinc-500 font-mono tracking-widest mt-1">SPATIAL NAV ENGINE v1.0</p>
           </div>
           
           <div className="flex flex-col items-end">

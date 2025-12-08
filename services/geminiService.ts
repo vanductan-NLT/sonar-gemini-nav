@@ -64,9 +64,12 @@ const schema = {
   required: ["safety_status", "navigation_command", "stereo_pan", "visual_debug"],
 };
 
-export const analyzeFrame = async (base64Image: string, customPrompt?: string): Promise<SonarResponse> => {
+export const analyzeFrame = async (base64Image: string, language: string = 'English', customPrompt?: string): Promise<SonarResponse> => {
   try {
-    const prompt = customPrompt || "Analyze this scene for navigation safety. Return boxes in [ymin, xmin, ymax, xmax] format scaled 0-1000.";
+    const langInstruction = `Output 'navigation_command', 'reasoning_summary', and labels in ${language}.`;
+    const prompt = customPrompt 
+      ? `${customPrompt} ${langInstruction}`
+      : `Analyze this scene for navigation safety. Return boxes in [ymin, xmin, ymax, xmax] format scaled 0-1000. ${langInstruction}`;
     
     const response = await ai.models.generateContent({
       model: "gemini-3-pro-preview",
@@ -105,14 +108,14 @@ export const analyzeFrame = async (base64Image: string, customPrompt?: string): 
   }
 };
 
-export const transcribeAudio = async (audioBase64: string): Promise<string> => {
+export const transcribeAudio = async (audioBase64: string, language: string = 'English'): Promise<string> => {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: {
         parts: [
           { inlineData: { mimeType: "audio/wav", data: audioBase64 } },
-          { text: "Transcribe this audio exactly." },
+          { text: `Transcribe this audio exactly. The spoken language is ${language}.` },
         ],
       },
     });
