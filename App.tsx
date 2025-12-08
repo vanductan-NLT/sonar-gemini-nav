@@ -78,7 +78,7 @@ const App: React.FC = () => {
   // --- Canvas Drawing (Judge's View) ---
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !lastResponse || !webcamRef.current?.video) return;
+    if (!canvas || !webcamRef.current?.video) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -91,6 +91,8 @@ const App: React.FC = () => {
     
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    if (!lastResponse) return;
+
     const drawBox = (box: number[], color: string, label: string) => {
        const [ymin, xmin, ymax, xmax] = box;
        const x = (xmin / 1000) * canvas.width;
@@ -98,32 +100,51 @@ const App: React.FC = () => {
        const w = ((xmax - xmin) / 1000) * canvas.width;
        const h = ((ymax - ymin) / 1000) * canvas.height;
 
-       // Tactical Corners
-       const lineLen = Math.min(w, h) * 0.2;
+       // 1. Draw Fill (Semi-transparent)
+       ctx.globalAlpha = 0.15;
+       ctx.fillStyle = color;
+       ctx.fillRect(x, y, w, h);
+       ctx.globalAlpha = 1.0;
+
+       // 2. Draw Bounding Box Border
        ctx.strokeStyle = color;
        ctx.lineWidth = 3;
-       
-       // Top Left
-       ctx.beginPath(); ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y); ctx.stroke();
-       // Top Right
-       ctx.beginPath(); ctx.moveTo(x + w - lineLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + lineLen); ctx.stroke();
-       // Bottom Right
-       ctx.beginPath(); ctx.moveTo(x + w, y + h - lineLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lineLen, y + h); ctx.stroke();
-       // Bottom Left
-       ctx.beginPath(); ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen); ctx.stroke();
+       ctx.strokeRect(x, y, w, h);
 
-       // Label
+       // 3. Draw Corner Accents (Tech Look)
+       const lineLen = Math.min(w, h) * 0.2;
+       ctx.lineWidth = 5;
+       ctx.beginPath(); 
+       // TL
+       ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
+       // TR
+       ctx.moveTo(x + w - lineLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + lineLen);
+       // BR
+       ctx.moveTo(x + w, y + h - lineLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lineLen, y + h);
+       // BL
+       ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen);
+       ctx.stroke();
+
+       // 4. Draw Label Background
+       const fontSize = 14;
+       ctx.font = `bold ${fontSize}px Courier New`;
+       const textMetrics = ctx.measureText(label.toUpperCase());
+       const textWidth = textMetrics.width;
+       
        ctx.fillStyle = color;
-       ctx.globalAlpha = 0.8;
-       ctx.fillRect(x, y - 22, ctx.measureText(label).width + 10, 22);
-       ctx.globalAlpha = 1.0;
+       ctx.fillRect(x, y - 24, textWidth + 12, 24);
+       
+       // 5. Draw Label Text
        ctx.fillStyle = "#000000";
-       ctx.font = "bold 14px Courier New";
-       ctx.fillText(label.toUpperCase(), x + 5, y - 6);
+       ctx.fillText(label.toUpperCase(), x + 6, y - 7);
     };
 
-    lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
-    lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label));
+    if (lastResponse.visual_debug?.hazards) {
+      lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
+    }
+    if (lastResponse.visual_debug?.safe_path) {
+      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label));
+    }
 
   }, [lastResponse]);
 
