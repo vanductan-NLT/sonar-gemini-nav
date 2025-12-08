@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { analyzeFrame, transcribeAudio, generateSpeech } from './services/geminiService';
-import { playBeep, playSonarPing } from './utils/audioUtils';
+import { playBeep, playSonarPing, getAudioContext } from './utils/audioUtils';
 import { SonarResponse, AppState } from './types';
 
 // Helper for converting blobs to base64
@@ -29,17 +29,9 @@ const App: React.FC = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   
-  // Audio Playback Ref
-  const audioContextRef = useRef<AudioContext | null>(null);
-
-  // Initialize Audio
+  // Initialize Audio (using Singleton)
   const initAudio = () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
+    getAudioContext();
   };
 
   // --- Voice Output ---
@@ -59,17 +51,18 @@ const App: React.FC = () => {
     // Quality path for queries
     if (useHighQuality) {
        const audioBase64 = await generateSpeech(text);
-       if (audioBase64 && audioContextRef.current) {
+       const ctx = getAudioContext();
+       if (audioBase64 && ctx) {
          try {
            const binaryString = atob(audioBase64);
            const len = binaryString.length;
            const bytes = new Uint8Array(len);
            for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
            
-           const audioBuffer = await audioContextRef.current.decodeAudioData(bytes.buffer);
-           const source = audioContextRef.current.createBufferSource();
+           const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
+           const source = ctx.createBufferSource();
            source.buffer = audioBuffer;
-           source.connect(audioContextRef.current.destination);
+           source.connect(ctx.destination);
            source.start(0);
          } catch (e) {
            console.error("Audio decode error", e);
@@ -140,8 +133,6 @@ const App: React.FC = () => {
     if (!imageSrc) return;
 
     setIsProcessing(true);
-    // Silent internal beep or very low volume if preferred, keeping it for rhythm
-    // playBeep(880, 20); 
 
     const base64Image = imageSrc.split(',')[1];
 
@@ -161,7 +152,7 @@ const App: React.FC = () => {
     let intervalId: any;
     if (appState === AppState.SCANNING) {
       runNavigationLoop();
-      intervalId = setInterval(runNavigationLoop, 3500); // Slightly longer interval to allow speech
+      intervalId = setInterval(runNavigationLoop, 3500); 
     }
     return () => clearInterval(intervalId);
   }, [appState, runNavigationLoop]);
@@ -239,6 +230,20 @@ const App: React.FC = () => {
     return '';
   };
 
+  // Directional Indicator Helper
+  const renderDirectionIndicator = () => {
+    if (!lastResponse || appState !== AppState.SCANNING) return null;
+    const pan = lastResponse.stereo_pan;
+    
+    if (pan < -0.3) {
+      return <div className="text-6xl font-black text-sonar-safe animate-pulse">←</div>;
+    } else if (pan > 0.3) {
+      return <div className="text-6xl font-black text-sonar-safe animate-pulse">→</div>;
+    } else {
+      return <div className="text-6xl font-black text-sonar-safe animate-pulse">↑</div>;
+    }
+  };
+
   return (
     <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none ${getAlertBg()}`}>
       
@@ -258,8 +263,10 @@ const App: React.FC = () => {
            <div className="absolute left-0 w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,102,0.8)] animate-scan pointer-events-none" />
          )}
 
-         {/* Center Crosshair */}
-         <div className="absolute text-sonar-white/30 text-2xl pointer-events-none">+</div>
+         {/* Center Crosshair or Direction */}
+         <div className="absolute z-30 pointer-events-none drop-shadow-lg">
+            {renderDirectionIndicator() || <div className="text-sonar-white/30 text-2xl">+</div>}
+         </div>
       </div>
 
       {/* 2. HUD Layer */}

@@ -1,12 +1,12 @@
 // Singleton AudioContext to prevent "limit reached" errors
 let audioCtx: AudioContext | null = null;
 
-const getAudioContext = () => {
+export const getAudioContext = () => {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
   }
   if (audioCtx.state === 'suspended') {
-    audioCtx.resume();
+    audioCtx.resume().catch(e => console.error("Audio resume failed", e));
   }
   return audioCtx;
 };
@@ -37,26 +37,29 @@ export const playSonarPing = (pan: number) => {
   if (!ctx) return;
 
   const osc = ctx.createOscillator();
-  const panner = ctx.createStereoPanner();
   const gain = ctx.createGain();
-
-  // Clamp pan between -1 and 1
-  const safePan = Math.max(-1, Math.min(1, pan));
+  
+  // Use StereoPanner if supported
+  let nodeToConnectToGain: AudioNode = osc;
+  
+  if (ctx.createStereoPanner) {
+    const panner = ctx.createStereoPanner();
+    const safePan = Math.max(-1, Math.min(1, pan));
+    panner.pan.setValueAtTime(safePan, ctx.currentTime);
+    osc.connect(panner);
+    nodeToConnectToGain = panner;
+  }
 
   // Sonar "Ping" sound: High pitch dropping slightly
   osc.frequency.setValueAtTime(800, ctx.currentTime);
   osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.15);
-  
-  // Stereo Panning
-  panner.pan.setValueAtTime(safePan, ctx.currentTime);
   
   // Envelope
   gain.gain.setValueAtTime(0, ctx.currentTime);
   gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.01);
   gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
 
-  osc.connect(panner);
-  panner.connect(gain);
+  nodeToConnectToGain.connect(gain);
   gain.connect(ctx.destination);
 
   osc.start();
