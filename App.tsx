@@ -130,20 +130,37 @@ const App: React.FC = () => {
        ctx.font = `bold ${fontSize}px Courier New`;
        const textMetrics = ctx.measureText(label.toUpperCase());
        const textWidth = textMetrics.width;
+       const labelHeight = 24;
+       const padding = 6;
        
+       // Calculate Label Position (Smart Positioning)
+       let labelX = x;
+       let labelY = y - labelHeight; // Default: Above box
+       
+       // Handle Top Edge Clipping: If label is off-screen top, move inside box
+       if (labelY < 0) {
+         labelY = y; 
+       }
+       
+       // Handle Right Edge Clipping
+       if (labelX + textWidth + (padding * 2) > canvas.width) {
+          labelX = canvas.width - (textWidth + (padding * 2));
+       }
+
        ctx.fillStyle = color;
-       ctx.fillRect(x, y - 24, textWidth + 12, 24);
+       ctx.fillRect(labelX, labelY, textWidth + (padding * 2), labelHeight);
        
        // 5. Draw Label Text
        ctx.fillStyle = "#000000";
-       ctx.fillText(label.toUpperCase(), x + 6, y - 7);
+       ctx.fillText(label.toUpperCase(), labelX + padding, labelY + 17);
     };
 
     if (lastResponse.visual_debug?.hazards) {
       lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label));
     }
     if (lastResponse.visual_debug?.safe_path) {
-      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', p.label));
+      // Explicitly label the green box as 'Safe Path'
+      lastResponse.visual_debug.safe_path.forEach(p => drawBox(p.box_2d, '#00FF66', 'Safe Path'));
     }
 
   }, [lastResponse]);
