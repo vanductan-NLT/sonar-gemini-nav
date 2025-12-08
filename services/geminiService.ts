@@ -87,7 +87,9 @@ export const analyzeFrame = async (base64Image: string, customPrompt?: string): 
     });
 
     if (response.text) {
-      return JSON.parse(response.text) as SonarResponse;
+      // Clean potential Markdown code blocks
+      let cleanText = response.text.replace(/```json/g, "").replace(/```/g, "").trim();
+      return JSON.parse(cleanText) as SonarResponse;
     }
     throw new Error("No response text");
   } catch (error) {

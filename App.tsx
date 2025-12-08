@@ -21,7 +21,7 @@ const App: React.FC = () => {
   // State
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [lastResponse, setLastResponse] = useState<SonarResponse | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessingState, setIsProcessingState] = useState(false); // For UI only
   const [emergencyLatch, setEmergencyLatch] = useState(false);
   
   // Refs
@@ -29,6 +29,7 @@ const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const isProcessingRef = useRef(false); // For logic checks (prevents re-render loops)
   
   // Initialize Audio (using Singleton)
   const initAudio = () => {
@@ -128,13 +129,15 @@ const App: React.FC = () => {
 
   // --- Navigation Loop ---
   const runNavigationLoop = useCallback(async () => {
-    // Stop loop if emergency latch is active
-    if (appState !== AppState.SCANNING || isProcessing || !webcamRef.current || emergencyLatch) return;
+    // Check ref instead of state to avoid dependency cycles
+    if (appState !== AppState.SCANNING || isProcessingRef.current || !webcamRef.current || emergencyLatch) return;
 
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
 
-    setIsProcessing(true);
+    // Set both ref and state
+    isProcessingRef.current = true;
+    setIsProcessingState(true);
 
     const base64Image = imageSrc.split(',')[1];
 
@@ -154,9 +157,10 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Loop Error", error);
     } finally {
-      setIsProcessing(false);
+      isProcessingRef.current = false;
+      setIsProcessingState(false);
     }
-  }, [appState, isProcessing, speak, emergencyLatch]);
+  }, [appState, speak, emergencyLatch]);
 
   useEffect(() => {
     let intervalId: any;
@@ -323,7 +327,7 @@ const App: React.FC = () => {
                 <p className="text-3xl font-bold text-white leading-tight">
                    {lastResponse.navigation_command}
                 </p>
-                {appState === AppState.PROCESSING_QUERY && (
+                {isProcessingState && (
                   <p className="text-sm font-mono text-sonar-yellow mt-2 animate-pulse">:: PROCESSING QUERY ::</p>
                 )}
              </div>
@@ -341,7 +345,7 @@ const App: React.FC = () => {
              onMouseUp={stopListening}
              onTouchStart={startListening}
              onTouchEnd={stopListening}
-             disabled={appState === AppState.PROCESSING_QUERY || emergencyLatch}
+             disabled={isProcessingState || emergencyLatch}
              className={`col-span-2 rounded-xl font-bold text-lg flex flex-col items-center justify-center border-2 transition-all active:scale-95 ${
                appState === AppState.LISTENING 
                ? 'bg-sonar-white text-black border-sonar-white shadow-[0_0_20px_rgba(255,255,255,0.4)]' 
