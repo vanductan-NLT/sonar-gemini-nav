@@ -335,6 +335,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Loop Error", error);
     } finally {
+      // Ensure state is cleared even if analysis fails
       isProcessingRef.current = false;
       setIsProcessingState(false);
     }
@@ -365,27 +366,43 @@ const App: React.FC = () => {
       mediaRecorderRef.current.ondataavailable = (event) => audioChunksRef.current.push(event.data);
       
       mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        const base64Audio = await blobToBase64(audioBlob);
-        
-        setAppState(AppState.PROCESSING_QUERY);
-        // Pass current language name to transcription
-        const query = await transcribeAudio(base64Audio, currentLang.name);
-        
-        if (query && webcamRef.current) {
-          const imageSrc = webcamRef.current.getScreenshot();
-          if (imageSrc) {
-             const base64Image = imageSrc.split(',')[1];
-             speak("Processing", false);
-             // Pass current language name to analysis
-             const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
-             setLastResponse(response);
-             speak(response.navigation_command + " " + response.reasoning_summary, true);
+        try {
+          // Verify we have audio data
+          if (audioChunksRef.current.length === 0) {
+            console.warn("No audio recorded");
+            return;
           }
-        } else {
-            speak("Unclear. Try again.", false);
+          
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+          const base64Audio = await blobToBase64(audioBlob);
+          
+          setAppState(AppState.PROCESSING_QUERY);
+          setIsProcessingState(true);
+          
+          // Pass current language name to transcription
+          const query = await transcribeAudio(base64Audio, currentLang.name);
+          
+          if (query && webcamRef.current) {
+            const imageSrc = webcamRef.current.getScreenshot();
+            if (imageSrc) {
+               const base64Image = imageSrc.split(',')[1];
+               speak("Processing", false);
+               // Pass current language name to analysis
+               const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
+               setLastResponse(response);
+               speak(response.navigation_command + " " + response.reasoning_summary, true);
+            }
+          } else {
+              speak("Unclear. Try again.", false);
+          }
+        } catch (error) {
+          console.error("Voice Processing Error", error);
+          speak("Error processing command", false);
+        } finally {
+          // Crucial: Reset state to IDLE in all cases
+          setAppState(AppState.IDLE);
+          setIsProcessingState(false);
         }
-        setAppState(AppState.IDLE);
       };
 
       mediaRecorderRef.current.start();
