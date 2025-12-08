@@ -40,6 +40,7 @@ const App: React.FC = () => {
   const [isProcessingState, setIsProcessingState] = useState(false); // For UI only
   const [emergencyLatch, setEmergencyLatch] = useState(false);
   const [langIndex, setLangIndex] = useState(0); // Default to English
+  const [showLangList, setShowLangList] = useState(false);
 
   const currentLang = LANGUAGES[langIndex];
   
@@ -96,12 +97,20 @@ const App: React.FC = () => {
     }
   }, [currentLang.locale]);
 
-  // --- Language Toggle ---
-  const toggleLanguage = () => {
-    const nextIndex = (langIndex + 1) % LANGUAGES.length;
-    setLangIndex(nextIndex);
-    const newLang = LANGUAGES[nextIndex];
-    speak(newLang.name); // Announce new language
+  // --- Language Selection ---
+  const selectLanguage = (index: number) => {
+    setLangIndex(index);
+    setShowLangList(false);
+    // Use a timeout to ensure the state update has processed if needed, 
+    // though passing the specific lang to speak() would be safer if we refactored speak().
+    // For now, we rely on the updated state re-render or just speak the name which is locale-agnostic enough.
+    const newLang = LANGUAGES[index];
+    
+    // Announce language change (using standard synthesis for speed)
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(newLang.name);
+    utterance.lang = newLang.locale;
+    window.speechSynthesis.speak(utterance);
   };
 
   // --- Canvas Drawing (Judge's View) ---
@@ -355,6 +364,35 @@ const App: React.FC = () => {
   return (
     <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none transition-colors duration-200 ${getAlertBg()}`}>
       
+      {/* Language List Overlay */}
+      {showLangList && (
+        <div className="absolute inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md animate-in fade-in duration-200">
+          <h2 className="text-sonar-white font-mono text-2xl font-bold mb-8 tracking-widest border-b border-zinc-800 pb-2">SELECT LANGUAGE</h2>
+          <div className="grid grid-cols-1 gap-4 w-full max-w-sm h-3/4 overflow-y-auto">
+            {LANGUAGES.map((lang, index) => (
+              <button
+                key={lang.code}
+                onClick={() => selectLanguage(index)}
+                className={`p-5 rounded-lg border-2 font-mono text-xl font-bold tracking-wider transition-all active:scale-95 flex justify-between items-center ${
+                  index === langIndex 
+                    ? 'border-sonar-yellow text-sonar-black bg-sonar-yellow shadow-[0_0_20px_rgba(255,215,0,0.4)]' 
+                    : 'border-zinc-800 text-zinc-400 bg-zinc-900/50 hover:border-sonar-white hover:text-sonar-white'
+                }`}
+              >
+                <span>{lang.name.toUpperCase()}</span>
+                {index === langIndex && <span>●</span>}
+              </button>
+            ))}
+          </div>
+          <button 
+            onClick={() => setShowLangList(false)}
+            className="mt-8 px-8 py-3 rounded border border-zinc-700 text-zinc-400 font-mono text-sm hover:text-white hover:border-white transition-colors"
+          >
+            CANCEL
+          </button>
+        </div>
+      )}
+
       {/* 1. Viewport Layer */}
       <div className={`absolute inset-4 z-0 border-2 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black ${emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 'border-zinc-800 bg-black'}`}>
          <Webcam
@@ -388,10 +426,12 @@ const App: React.FC = () => {
                
                {/* Language Toggle Button */}
                <button 
-                 onClick={toggleLanguage}
-                 className="bg-zinc-800/80 border border-zinc-600 text-sonar-white font-mono text-xs px-2 py-1 rounded hover:bg-zinc-700 active:scale-95 transition-all"
+                 onClick={() => setShowLangList(true)}
+                 className="bg-zinc-900/90 border border-zinc-700 text-sonar-yellow font-mono text-xs font-bold px-3 py-1 rounded hover:bg-zinc-800 active:scale-95 transition-all flex items-center gap-1 shadow-lg"
+                 aria-label="Select Language"
                >
-                 [{currentLang.label}]
+                 <span>{currentLang.label}</span>
+                 <span className="text-[10px] opacity-70">▼</span>
                </button>
             </div>
             <p className="text-xs text-zinc-500 font-mono tracking-widest mt-1">SPATIAL NAV ENGINE v1.0</p>
