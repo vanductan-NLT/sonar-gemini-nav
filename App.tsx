@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [lastResponse, setLastResponse] = useState<SonarResponse | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [emergencyLatch, setEmergencyLatch] = useState(false);
   
   // Refs
   const webcamRef = useRef<Webcam>(null);
@@ -127,7 +128,8 @@ const App: React.FC = () => {
 
   // --- Navigation Loop ---
   const runNavigationLoop = useCallback(async () => {
-    if (appState !== AppState.SCANNING || isProcessing || !webcamRef.current) return;
+    // Stop loop if emergency latch is active
+    if (appState !== AppState.SCANNING || isProcessing || !webcamRef.current || emergencyLatch) return;
 
     const imageSrc = webcamRef.current.getScreenshot();
     if (!imageSrc) return;
@@ -139,26 +141,36 @@ const App: React.FC = () => {
     try {
       const data = await analyzeFrame(base64Image);
       setLastResponse(data);
-      playSonarPing(data.stereo_pan);
-      speak(data.navigation_command, false);
+      
+      if (data.safety_status === 'STOP') {
+        setEmergencyLatch(true); // Latch emergency mode
+        playBeep(1000, 500, 'sawtooth'); // Alarm sound
+        speak(data.navigation_command, false);
+      } else {
+        playSonarPing(data.stereo_pan);
+        speak(data.navigation_command, false);
+      }
+      
     } catch (error) {
       console.error("Loop Error", error);
     } finally {
       setIsProcessing(false);
     }
-  }, [appState, isProcessing, speak]);
+  }, [appState, isProcessing, speak, emergencyLatch]);
 
   useEffect(() => {
     let intervalId: any;
-    if (appState === AppState.SCANNING) {
+    // Only run loop if scanning AND not in emergency mode
+    if (appState === AppState.SCANNING && !emergencyLatch) {
       runNavigationLoop();
       intervalId = setInterval(runNavigationLoop, 3500); 
     }
     return () => clearInterval(intervalId);
-  }, [appState, runNavigationLoop]);
+  }, [appState, runNavigationLoop, emergencyLatch]);
 
   // --- Input ---
   const startListening = async () => {
+    if (emergencyLatch) return; // Disable voice input during emergency
     if (appState === AppState.SCANNING) setAppState(AppState.IDLE);
     setAppState(AppState.LISTENING);
     playBeep(600, 100);
@@ -208,6 +220,15 @@ const App: React.FC = () => {
 
   const toggleNavigation = () => {
     initAudio();
+    // If in emergency latch, this button acts as RESET
+    if (emergencyLatch) {
+      setEmergencyLatch(false);
+      setAppState(AppState.IDLE);
+      setLastResponse(null);
+      speak("System Reset", false);
+      return;
+    }
+
     if (appState === AppState.SCANNING) {
       setAppState(AppState.IDLE);
       speak("System Paused", false);
@@ -220,18 +241,21 @@ const App: React.FC = () => {
 
   // --- UI Helpers ---
   const getStatusColor = () => {
+    if (emergencyLatch) return 'text-sonar-alert';
     if (lastResponse?.safety_status === 'STOP') return 'text-sonar-alert';
     if (lastResponse?.safety_status === 'CAUTION') return 'text-sonar-yellow';
     return 'text-sonar-safe';
   };
 
   const getAlertBg = () => {
+    if (emergencyLatch) return 'bg-red-600 animate-flash';
     if (lastResponse?.safety_status === 'STOP') return 'bg-red-900/50 animate-pulse';
     return '';
   };
 
   // Directional Indicator Helper
   const renderDirectionIndicator = () => {
+    if (emergencyLatch) return <div className="text-8xl font-black text-white animate-pulse">STOP</div>;
     if (!lastResponse || appState !== AppState.SCANNING) return null;
     const pan = lastResponse.stereo_pan;
     
@@ -245,10 +269,10 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none ${getAlertBg()}`}>
+    <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none transition-colors duration-200 ${getAlertBg()}`}>
       
       {/* 1. Viewport Layer */}
-      <div className="absolute inset-4 z-0 border-2 border-zinc-800 bg-black rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black">
+      <div className={`absolute inset-4 z-0 border-2 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black ${emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 'border-zinc-800 bg-black'}`}>
          <Webcam
            ref={webcamRef}
            audio={false}
@@ -259,7 +283,7 @@ const App: React.FC = () => {
          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
          
          {/* Scanning Animation Line */}
-         {appState === AppState.SCANNING && (
+         {appState === AppState.SCANNING && !emergencyLatch && (
            <div className="absolute left-0 w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,102,0.8)] animate-scan pointer-events-none" />
          )}
 
@@ -281,12 +305,12 @@ const App: React.FC = () => {
           
           <div className="flex flex-col items-end">
              <div className="flex items-center gap-2 bg-black/80 px-3 py-1 rounded border border-zinc-800">
-                <div className={`w-3 h-3 rounded-full ${appState === AppState.SCANNING ? 'bg-sonar-safe animate-pulse' : 'bg-zinc-600'}`}></div>
-                <span className="text-sm font-mono font-bold text-sonar-white">{appState}</span>
+                <div className={`w-3 h-3 rounded-full ${emergencyLatch ? 'bg-sonar-alert animate-ping' : appState === AppState.SCANNING ? 'bg-sonar-safe animate-pulse' : 'bg-zinc-600'}`}></div>
+                <span className="text-sm font-mono font-bold text-sonar-white">{emergencyLatch ? 'EMERGENCY' : appState}</span>
              </div>
              {lastResponse && (
                <div className={`mt-2 text-xl font-black font-mono tracking-widest ${getStatusColor()}`}>
-                 [{lastResponse.safety_status}]
+                 [{emergencyLatch ? 'STOP' : lastResponse.safety_status}]
                </div>
              )}
           </div>
@@ -304,7 +328,7 @@ const App: React.FC = () => {
                 )}
              </div>
            )}
-           {appState === AppState.IDLE && !lastResponse && (
+           {appState === AppState.IDLE && !lastResponse && !emergencyLatch && (
               <div className="text-zinc-600 font-mono text-sm animate-pulse">SYSTEM STANDBY</div>
            )}
         </div>
@@ -317,11 +341,13 @@ const App: React.FC = () => {
              onMouseUp={stopListening}
              onTouchStart={startListening}
              onTouchEnd={stopListening}
-             disabled={appState === AppState.PROCESSING_QUERY}
+             disabled={appState === AppState.PROCESSING_QUERY || emergencyLatch}
              className={`col-span-2 rounded-xl font-bold text-lg flex flex-col items-center justify-center border-2 transition-all active:scale-95 ${
                appState === AppState.LISTENING 
                ? 'bg-sonar-white text-black border-sonar-white shadow-[0_0_20px_rgba(255,255,255,0.4)]' 
-               : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:border-sonar-white'
+               : emergencyLatch 
+                  ? 'bg-zinc-900/50 text-zinc-600 border-zinc-800 cursor-not-allowed'
+                  : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:border-sonar-white'
              }`}
            >
              <span className="text-2xl mb-1">{appState === AppState.LISTENING ? '◉' : '○'}</span>
@@ -335,12 +361,14 @@ const App: React.FC = () => {
            <button
              onClick={toggleNavigation}
              className={`col-span-2 rounded-xl font-black text-xl flex items-center justify-center border-2 transition-all active:scale-95 shadow-lg ${
-               appState === AppState.SCANNING
+               emergencyLatch
+               ? 'bg-sonar-white text-black border-sonar-alert shadow-[0_0_30px_rgba(255,0,0,0.8)] animate-pulse'
+               : appState === AppState.SCANNING
                ? 'bg-sonar-alert text-black border-sonar-alert shadow-[0_0_20px_rgba(255,51,51,0.5)]'
                : 'bg-sonar-safe text-black border-sonar-safe shadow-[0_0_20px_rgba(0,255,102,0.3)]'
              }`}
            >
-             {appState === AppState.SCANNING ? 'STOP' : 'START'}
+             {emergencyLatch ? 'RESET SYSTEM' : appState === AppState.SCANNING ? 'STOP' : 'START'}
            </button>
         </div>
 
