@@ -43,42 +43,50 @@ export const playCautionSound = (pan: number) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     
-    // Triangle wave: Richer than sine, smoother than square/sawtooth
-    // This fits "Distinct but less alarming than STOP"
     osc.type = 'triangle';
     
     // Pitch Slide: 600Hz down to 300Hz
-    // Indicates "warning/negative" movement but in mid-range
     osc.frequency.setValueAtTime(600, startTime + offset);
     osc.frequency.exponentialRampToValueAtTime(300, startTime + offset + 0.15);
 
-    // Spatial Panning
-    let sourceNode: AudioNode = osc;
-    if (ctx.createStereoPanner) {
-      const panner = ctx.createStereoPanner();
-      panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), startTime + offset);
-      osc.connect(panner);
-      sourceNode = panner;
-    } else {
-        // Fallback for browsers without StereoPanner
-        sourceNode = osc;
-    }
-
-    // Connect chain
-    sourceNode.connect(gain);
-    gain.connect(ctx.destination);
-
     // Envelope (Quick warning blip)
-    // Volume 0.15 is balanced between Safe (0.3 sine) and Stop (sawtooth)
     gain.gain.setValueAtTime(0, startTime + offset);
     gain.gain.linearRampToValueAtTime(0.15, startTime + offset + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.001, startTime + offset + 0.15);
 
+    // Spatial Panning Logic
+    let outputNode: AudioNode = gain;
+    
+    if (ctx.createStereoPanner) {
+      const panner = ctx.createStereoPanner();
+      const safePan = Math.max(-1, Math.min(1, pan));
+      panner.pan.setValueAtTime(safePan, startTime + offset);
+      gain.connect(panner);
+      outputNode = panner;
+    } else {
+       // Fallback for browsers without StereoPanner
+       const panner = ctx.createPanner();
+       panner.panningModel = 'HRTF';
+       panner.distanceModel = 'inverse';
+       
+       const x = Math.max(-1, Math.min(1, pan));
+       // Position listener at origin
+       ctx.listener.setPosition(0, 0, 0);
+       // Position sound source
+       panner.setPosition(x, 0, -1);
+       
+       gain.connect(panner);
+       outputNode = panner;
+    }
+
+    outputNode.connect(ctx.destination);
+
+    osc.connect(gain);
     osc.start(startTime + offset);
     osc.stop(startTime + offset + 0.2);
   };
 
-  // Double pulse pattern "Bup-Bup" for noticeable attention
+  // Double pulse pattern "Bup-Bup"
   playPulse(0);
   playPulse(0.18);
 };
@@ -90,36 +98,44 @@ export const playSonarPing = (pan: number) => {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   
-  // Explicitly set to sine for a pure sonar ping sound
   osc.type = 'sine';
   
-  // Use StereoPanner if supported
-  let nodeToConnectToGain: AudioNode = osc;
+  // Sonar "Ping" sound: High pitch dropping slightly
+  const now = ctx.currentTime;
+  osc.frequency.setValueAtTime(800, now);
+  osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
   
+  // Envelope
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.3, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+  // Spatial Panning Logic
+  let outputNode: AudioNode = gain;
+
   if (ctx.createStereoPanner) {
     const panner = ctx.createStereoPanner();
     const safePan = Math.max(-1, Math.min(1, pan));
     panner.pan.setValueAtTime(safePan, ctx.currentTime);
-    osc.connect(panner);
-    nodeToConnectToGain = panner;
+    gain.connect(panner);
+    outputNode = panner;
   } else {
-    // Fallback logic handled by variable assignment;
-    // We only connect osc directly to gain if panner isn't used below.
-    nodeToConnectToGain = osc;
+    // Fallback using PannerNode (HRTF 3D Audio)
+    const panner = ctx.createPanner();
+    panner.panningModel = 'HRTF';
+    panner.distanceModel = 'inverse';
+    
+    const x = Math.max(-1, Math.min(1, pan));
+    // Listener default is 0,0,0
+    panner.setPosition(x, 0, -1); // Sound is in front, moving left/right
+    
+    gain.connect(panner);
+    outputNode = panner;
   }
 
-  // Sonar "Ping" sound: High pitch dropping slightly
-  osc.frequency.setValueAtTime(800, ctx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.15);
-  
-  // Envelope
-  gain.gain.setValueAtTime(0, ctx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+  outputNode.connect(ctx.destination);
+  osc.connect(gain);
 
-  nodeToConnectToGain.connect(gain);
-  gain.connect(ctx.destination);
-
-  osc.start();
-  osc.stop(ctx.currentTime + 0.3);
+  osc.start(now);
+  osc.stop(now + 0.3);
 };
