@@ -227,6 +227,63 @@ const App: React.FC = () => {
       });
     }
 
+    // --- Stereo Pan Visualizer (Visual Feedback for Judges) ---
+    const pan = lastResponse.stereo_pan;
+    const centerY = canvas.height * 0.93; // Position at bottom (93% height)
+    const centerX = canvas.width / 2;
+    const barWidth = canvas.width * 0.6; // 60% of width
+    
+    // 1. Draw Track
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.moveTo(centerX - barWidth/2, centerY);
+    ctx.lineTo(centerX + barWidth/2, centerY);
+    ctx.stroke();
+
+    // 2. Draw Center Tick (Reference)
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.lineWidth = 2;
+    ctx.moveTo(centerX, centerY - 10);
+    ctx.lineTo(centerX, centerY + 10);
+    ctx.stroke();
+
+    // 3. Draw Ends (L/R)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.font = 'bold 12px Courier New';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    ctx.fillText('L', centerX - barWidth/2 - 10, centerY);
+    ctx.textAlign = 'left';
+    ctx.fillText('R', centerX + barWidth/2 + 10, centerY);
+
+    // 4. Calculate Indicator Position
+    const clampedPan = Math.max(-1, Math.min(1, pan));
+    const indicatorX = centerX + (clampedPan * (barWidth / 2));
+    
+    // Determine Color
+    let indicatorColor = '#00FF66'; // Safe
+    if (lastResponse.safety_status === 'CAUTION') indicatorColor = '#FFD700';
+    if (lastResponse.safety_status === 'STOP') indicatorColor = '#FF3333';
+
+    // 5. Draw Indicator (Glowing Dot)
+    ctx.shadowColor = indicatorColor;
+    ctx.shadowBlur = 15;
+    ctx.fillStyle = indicatorColor;
+    ctx.beginPath();
+    ctx.arc(indicatorX, centerY, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0; // Reset
+
+    // 6. Draw Value Text
+    ctx.fillStyle = indicatorColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = 'bold 10px Courier New';
+    ctx.fillText(`PAN: ${pan.toFixed(2)}`, centerX, centerY + 15);
+
   }, [lastResponse]);
 
   // --- Navigation Loop ---
