@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
+import * as tf from '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { analyzeFrame, transcribeAudio, generateSpeech } from './services/geminiService';
 import { playBeep, playSonarPing, playCautionSound, getAudioContext } from './utils/audioUtils';
 import { SonarResponse, AppState } from './types';
@@ -20,10 +22,10 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
 // Language Configuration
 interface LanguageOption {
   name: string;
-  code: string; // for Gemini
-  locale: string; // for Web Speech API
-  label: string; // UI Button label
-  flag: string; // Emoji flag
+  code: string; 
+  locale: string; 
+  label: string; 
+  flag: string; 
 }
 
 const LANGUAGES: LanguageOption[] = [
@@ -38,31 +40,59 @@ const App: React.FC = () => {
   // State
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [lastResponse, setLastResponse] = useState<SonarResponse | null>(null);
-  const [isProcessingState, setIsProcessingState] = useState(false); // For UI only
+  const [isProcessingState, setIsProcessingState] = useState(false); 
   const [emergencyLatch, setEmergencyLatch] = useState(false);
-  const [langIndex, setLangIndex] = useState(0); // Default to English
+  const [langIndex, setLangIndex] = useState(0); 
   const [showLangList, setShowLangList] = useState(false);
+  const [modelLoaded, setModelLoaded] = useState(false);
 
   const currentLang = LANGUAGES[langIndex];
   
   // Refs
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const processingCanvasRef = useRef<HTMLCanvasElement>(null); // Hidden canvas for resizing
+  const processingCanvasRef = useRef<HTMLCanvasElement>(null); 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const isProcessingRef = useRef(false); // For logic checks (prevents re-render loops)
+  const isProcessingRef = useRef(false); // For Gemini Loop lock
   
-  // Initialize Audio (using Singleton)
+  // Realtime Detection Refs
+  const netRef = useRef<cocoSsd.ObjectDetection | null>(null);
+  const detectedObjectsRef = useRef<cocoSsd.DetectedObject[]>([]);
+  const isDetectingRef = useRef(false); // For TFJS Loop lock
+  const lastResponseRef = useRef<SonarResponse | null>(null); // Mirror state for render loop
+  const animationFrameIdRef = useRef<number>(0);
+
+  // Initialize Audio
   const initAudio = () => {
     getAudioContext();
   };
+
+  // --- Load TensorFlow Model ---
+  useEffect(() => {
+    const loadModel = async () => {
+      try {
+        await tf.ready();
+        const model = await cocoSsd.load({ base: 'lite_mobilenet_v2' }); // Use lite model for speed
+        netRef.current = model;
+        setModelLoaded(true);
+        console.log("COCO-SSD Loaded");
+      } catch (err) {
+        console.error("Failed to load COCO-SSD", err);
+      }
+    };
+    loadModel();
+  }, []);
+
+  // --- Sync State to Ref for Render Loop ---
+  useEffect(() => {
+    lastResponseRef.current = lastResponse;
+  }, [lastResponse]);
 
   // --- Voice Output ---
   const speak = useCallback(async (text: string, useHighQuality = false) => {
     if (!text) return;
     
-    // Fast path for navigation loop
     if (!useHighQuality && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -73,7 +103,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // Quality path for queries
     if (useHighQuality) {
        const audioBase64 = await generateSpeech(text);
        const ctx = getAudioContext();
@@ -99,7 +128,6 @@ const App: React.FC = () => {
     }
   }, [currentLang.locale]);
 
-  // --- Language Selection ---
   const selectLanguage = (index: number) => {
     setLangIndex(index);
     setShowLangList(false);
@@ -110,183 +138,166 @@ const App: React.FC = () => {
     window.speechSynthesis.speak(utterance);
   };
 
-  // --- Canvas Drawing (Judge's View) ---
+  // --- Unified Render & Detection Loop (60 FPS) ---
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !webcamRef.current?.video) return;
+    const loop = async () => {
+      const canvas = canvasRef.current;
+      const video = webcamRef.current?.video;
+      
+      if (canvas && video && video.readyState === 4) {
+        // Match dimensions
+        if (canvas.width !== video.clientWidth) canvas.width = video.clientWidth;
+        if (canvas.height !== video.clientHeight) canvas.height = video.clientHeight;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            // 1. Run Local Object Detection (Fast, Async, Non-blocking)
+            if (netRef.current && appState === AppState.SCANNING && !emergencyLatch && !isDetectingRef.current) {
+                isDetectingRef.current = true;
+                // Run detection on next microtask
+                netRef.current.detect(video, undefined, 0.4).then(detections => {
+                    detectedObjectsRef.current = detections;
+                    isDetectingRef.current = false;
+                }).catch(e => {
+                    console.warn("TF Detection error", e);
+                    isDetectingRef.current = false;
+                });
+            }
 
-    const video = webcamRef.current.video;
-    
-    // Match visual size
-    canvas.width = video.clientWidth;
-    canvas.height = video.clientHeight;
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // 2. Clear & Draw
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (!lastResponse) return;
+            // Helper to draw boxes
+            const drawBox = (
+                x: number, y: number, w: number, h: number, 
+                color: string, label: string, isThick: boolean = false
+            ) => {
+                ctx.strokeStyle = color;
+                ctx.lineWidth = isThick ? 4 : 2;
+                ctx.strokeRect(x, y, w, h);
 
-    const drawBox = (box: number[], color: string, label: string, fillOpacity = 0.15) => {
-       const [ymin, xmin, ymax, xmax] = box;
-       const x = (xmin / 1000) * canvas.width;
-       const y = (ymin / 1000) * canvas.height;
-       const w = ((xmax - xmin) / 1000) * canvas.width;
-       const h = ((ymax - ymin) / 1000) * canvas.height;
+                // Label Background
+                ctx.fillStyle = color;
+                const fontSize = isThick ? 14 : 10;
+                ctx.font = `bold ${fontSize}px Courier New`;
+                const textMetrics = ctx.measureText(label);
+                const textWidth = textMetrics.width;
+                const textHeight = fontSize + 4;
+                
+                // Keep label inside canvas
+                let ly = y - textHeight;
+                if (ly < 0) ly = y;
+                let lx = x;
+                if (lx + textWidth > canvas.width) lx = canvas.width - textWidth;
 
-       ctx.globalAlpha = fillOpacity;
-       ctx.fillStyle = color;
-       ctx.fillRect(x, y, w, h);
-       ctx.globalAlpha = 1.0;
+                ctx.globalAlpha = 0.8;
+                ctx.fillRect(lx, ly, textWidth + 8, textHeight);
+                ctx.globalAlpha = 1.0;
 
-       ctx.strokeStyle = color;
-       ctx.lineWidth = 3;
-       ctx.strokeRect(x, y, w, h);
+                ctx.fillStyle = '#000';
+                ctx.textBaseline = 'top';
+                ctx.fillText(label.toUpperCase(), lx + 4, ly + 2);
+            };
 
-       // Tech corners
-       const lineLen = Math.min(w, h) * 0.2;
-       ctx.lineWidth = 5;
-       ctx.beginPath(); 
-       ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
-       ctx.moveTo(x + w - lineLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + lineLen);
-       ctx.moveTo(x + w, y + h - lineLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lineLen, y + h);
-       ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen);
-       ctx.stroke();
+            // 3. Render TFJS Detections (Tactical Layer - Cyan)
+            // Filter out common overlaps if needed, or just draw all
+            if (appState === AppState.SCANNING && !emergencyLatch) {
+                detectedObjectsRef.current.forEach(obj => {
+                    // Ignore persons if we have Gemini data to avoid clutter, or keep them for raw tracking
+                    drawBox(obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[3], '#00FFFF', `${obj.class} ${(obj.score*100).toFixed(0)}%`, false);
+                });
+            }
 
-       // Label
-       const fontSize = 14;
-       ctx.font = `bold ${fontSize}px Courier New`;
-       const text = label.toUpperCase();
-       const textMetrics = ctx.measureText(text);
-       const paddingX = 8;
-       const paddingY = 6;
-       const textWidth = textMetrics.width;
-       const labelHeight = fontSize + (paddingY * 2);
-       const labelWidth = textWidth + (paddingX * 2);
-       
-       let labelX = x;
-       if (labelX + labelWidth > canvas.width) labelX = canvas.width - labelWidth;
-       if (labelX < 0) labelX = 0;
-
-       let labelY = y - labelHeight; 
-       if (labelY < 0) labelY = y;
-       if (labelY + labelHeight > canvas.height) labelY = canvas.height - labelHeight;
-
-       ctx.fillStyle = color;
-       ctx.shadowColor = "rgba(0,0,0,0.8)";
-       ctx.shadowBlur = 4;
-       ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
-       ctx.shadowBlur = 0; 
-       
-       ctx.fillStyle = "#000000";
-       ctx.textBaseline = 'middle';
-       ctx.fillText(text, labelX + paddingX, labelY + (labelHeight / 2) + 1);
+            // 4. Render Gemini Detections (Strategic Layer - Red/Green)
+            const geminiData = lastResponseRef.current;
+            if (geminiData) {
+                if (geminiData.visual_debug?.hazards) {
+                    geminiData.visual_debug.hazards.forEach(h => {
+                        const [ymin, xmin, ymax, xmax] = h.box_2d;
+                        const x = (xmin / 1000) * canvas.width;
+                        const y = (ymin / 1000) * canvas.height;
+                        const w = ((xmax - xmin) / 1000) * canvas.width;
+                        const hBox = ((ymax - ymin) / 1000) * canvas.height;
+                        drawBox(x, y, w, hBox, '#FF3333', `HAZARD: ${h.label}`, true);
+                    });
+                }
+                if (geminiData.visual_debug?.safe_path) {
+                    geminiData.visual_debug.safe_path.forEach(p => {
+                        const [ymin, xmin, ymax, xmax] = p.box_2d;
+                        const x = (xmin / 1000) * canvas.width;
+                        const y = (ymin / 1000) * canvas.height;
+                        const w = ((xmax - xmin) / 1000) * canvas.width;
+                        const hBox = ((ymax - ymin) / 1000) * canvas.height;
+                        
+                        let label = p.label || 'SAFE PATH';
+                        if (label.toUpperCase() === 'PATH') label = 'SAFE PATH';
+                        drawBox(x, y, w, hBox, '#00FF66', label, true);
+                    });
+                }
+                
+                // Draw Pan Indicator
+                drawPanIndicator(ctx, canvas.width, canvas.height, geminiData);
+            }
+        }
+      }
+      animationFrameIdRef.current = requestAnimationFrame(loop);
     };
 
-    if (lastResponse.visual_debug?.hazards) {
-      lastResponse.visual_debug.hazards.forEach(h => drawBox(h.box_2d, '#FF3333', h.label, 0.15));
-    }
-    if (lastResponse.visual_debug?.safe_path) {
-      lastResponse.visual_debug.safe_path.forEach(p => {
-        let label = p.label || 'SAFE PATH';
-        if (label.toUpperCase() === 'PATH') label = 'SAFE PATH';
-        drawBox(p.box_2d, '#00FF66', label, 0.3);
-      });
-    }
+    animationFrameIdRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animationFrameIdRef.current);
+  }, [appState, emergencyLatch]);
 
-    // --- Stereo Pan Visualizer ---
-    const pan = lastResponse.stereo_pan;
-    const centerY = canvas.height * 0.93; 
-    const centerX = canvas.width / 2;
-    const barWidth = canvas.width * 0.6; 
+  const drawPanIndicator = (ctx: CanvasRenderingContext2D, w: number, h: number, data: SonarResponse) => {
+    const pan = data.stereo_pan;
+    const cy = h * 0.93;
+    const cx = w / 2;
+    const barW = w * 0.6;
     
+    // Track
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
-    ctx.moveTo(centerX - barWidth/2, centerY);
-    ctx.lineTo(centerX + barWidth/2, centerY);
+    ctx.moveTo(cx - barW/2, cy);
+    ctx.lineTo(cx + barW/2, cy);
     ctx.stroke();
 
+    // Indicator
+    const ix = cx + (Math.max(-1, Math.min(1, pan)) * (barW/2));
+    let color = '#00FF66';
+    if (data.safety_status === 'CAUTION') color = '#FFD700';
+    if (data.safety_status === 'STOP') color = '#FF3333';
+
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.lineWidth = 2;
-    ctx.moveTo(centerX, centerY - 10);
-    ctx.lineTo(centerX, centerY + 10);
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    ctx.font = 'bold 12px Courier New';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'right';
-    ctx.fillText('L', centerX - barWidth/2 - 10, centerY);
-    ctx.textAlign = 'left';
-    ctx.fillText('R', centerX + barWidth/2 + 10, centerY);
-
-    const clampedPan = Math.max(-1, Math.min(1, pan));
-    const indicatorX = centerX + (clampedPan * (barWidth / 2));
-    
-    let indicatorColor = '#00FF66'; 
-    if (lastResponse.safety_status === 'CAUTION') indicatorColor = '#FFD700';
-    if (lastResponse.safety_status === 'STOP') indicatorColor = '#FF3333';
-
-    ctx.shadowColor = indicatorColor;
-    ctx.shadowBlur = 15;
-    ctx.fillStyle = indicatorColor;
-    ctx.beginPath();
-    ctx.arc(indicatorX, centerY, 8, 0, Math.PI * 2);
+    ctx.arc(ix, cy, 8, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
+  };
 
-    ctx.fillStyle = indicatorColor;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.font = 'bold 10px Courier New';
-    ctx.fillText(`PAN: ${pan.toFixed(2)}`, centerX, centerY + 15);
-
-  }, [lastResponse]);
-
-  // --- Navigation Loop (Recursive) ---
+  // --- Gemini Navigation Loop (Recursive) ---
   const runNavigationLoop = useCallback(async () => {
-    // Stop condition: Not scanning, or processing lock, or invalid webcam
     if (appState !== AppState.SCANNING || isProcessingRef.current || !webcamRef.current || emergencyLatch) return;
 
     const video = webcamRef.current.video;
     if (!video || video.readyState !== 4) {
-        // Retry shortly if video not ready
         requestAnimationFrame(() => runNavigationLoop());
         return;
     }
 
-    // Lock processing
     isProcessingRef.current = true;
     setIsProcessingState(true);
 
     let base64Image = "";
-
-    // 1. Resize and Optimize Image
+    // Optimize Image for Cloud
     if (processingCanvasRef.current) {
         const pCtx = processingCanvasRef.current.getContext('2d');
         if (pCtx) {
-            // Draw 512x512 for optimal AI input speed
             pCtx.drawImage(video, 0, 0, 512, 512);
-            // Export low quality JPEG
             base64Image = processingCanvasRef.current.toDataURL('image/jpeg', 0.6).split(',')[1];
         }
-    }
-
-    // Fallback
-    if (!base64Image) {
-        const src = webcamRef.current.getScreenshot();
-        if (src) base64Image = src.split(',')[1];
-    }
-
-    if (!base64Image) {
-        isProcessingRef.current = false;
-        setIsProcessingState(false);
-        requestAnimationFrame(() => runNavigationLoop());
-        return;
     }
 
     try {
@@ -297,8 +308,8 @@ const App: React.FC = () => {
         ? `${data.navigation_command}. ${data.reasoning_summary}`
         : data.navigation_command;
       
-      const wordCount = combinedText.split(/\s+/).filter(w => w.length > 0).length;
-      const voiceMessage = (wordCount <= 10 && data.reasoning_summary) 
+      // Throttle speech: Only speak if critical or simple command
+      const voiceMessage = (data.safety_status !== 'SAFE' || !lastResponseRef.current) 
         ? combinedText 
         : data.navigation_command;
 
@@ -313,35 +324,31 @@ const App: React.FC = () => {
         playSonarPing(data.stereo_pan);
         speak(voiceMessage, false);
       }
-      
     } catch (error) {
-      console.error("Loop Error", error);
+      console.error("Gemini Loop Error", error);
     } finally {
-      // Release Lock
       isProcessingRef.current = false;
       setIsProcessingState(false);
-      
-      // RECURSIVE CALL: Schedule next frame immediately via AnimationFrame
-      // This is the fastest possible loop that respects browser painting
+      // Loop
       if (appState === AppState.SCANNING && !emergencyLatch) {
          requestAnimationFrame(() => runNavigationLoop()); 
       }
     }
   }, [appState, speak, emergencyLatch, currentLang.name]);
 
-  // Start Loop Trigger
+  // Trigger Gemini Loop
   useEffect(() => {
     if (appState === AppState.SCANNING && !emergencyLatch) {
       runNavigationLoop();
     }
-    // Cleanup ensures we don't leave processing states stuck if component unmounts
     return () => {
         isProcessingRef.current = false;
         setIsProcessingState(false);
     };
   }, [appState, emergencyLatch, runNavigationLoop]);
 
-  // --- Input ---
+
+  // --- User Input & UI Methods ---
   const startListening = async () => {
     if (emergencyLatch) return;
     if (appState === AppState.SCANNING) setAppState(AppState.IDLE);
@@ -352,19 +359,14 @@ const App: React.FC = () => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorderRef.current = new MediaRecorder(stream);
       audioChunksRef.current = [];
-
       mediaRecorderRef.current.ondataavailable = (event) => audioChunksRef.current.push(event.data);
-      
       mediaRecorderRef.current.onstop = async () => {
         try {
           if (audioChunksRef.current.length === 0) return;
-          
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
           const base64Audio = await blobToBase64(audioBlob);
-          
           setAppState(AppState.PROCESSING_QUERY);
           setIsProcessingState(true);
-          
           const query = await transcribeAudio(base64Audio, currentLang.name);
           
           if (query && webcamRef.current) {
@@ -372,22 +374,20 @@ const App: React.FC = () => {
             if (imageSrc) {
                const base64Image = imageSrc.split(',')[1];
                speak("Processing", false);
-               const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
+               const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input.`);
                setLastResponse(response);
                speak(response.navigation_command + " " + response.reasoning_summary, true);
             }
           } else {
-              speak("Unclear. Try again.", false);
+              speak("Unclear.", false);
           }
         } catch (error) {
-          console.error("Voice Processing Error", error);
-          speak("Error processing command", false);
+          console.error("Query Error", error);
         } finally {
           setAppState(AppState.IDLE);
           setIsProcessingState(false);
         }
       };
-
       mediaRecorderRef.current.start();
     } catch (e) {
       console.error("Mic error", e);
@@ -408,17 +408,18 @@ const App: React.FC = () => {
       setEmergencyLatch(false);
       setAppState(AppState.IDLE);
       setLastResponse(null);
+      detectedObjectsRef.current = [];
       speak("System Reset", false);
       return;
     }
-
     if (appState === AppState.SCANNING) {
       setAppState(AppState.IDLE);
-      speak("System Paused", false);
+      speak("Paused", false);
       setLastResponse(null);
+      detectedObjectsRef.current = [];
     } else {
       setAppState(AppState.SCANNING);
-      speak("System Active. Scanning.", false);
+      speak("Scanning", false);
     }
   };
 
@@ -439,23 +440,17 @@ const App: React.FC = () => {
     if (emergencyLatch) return <div className="text-8xl font-black text-white animate-pulse">STOP</div>;
     if (!lastResponse || appState !== AppState.SCANNING) return null;
     const pan = lastResponse.stereo_pan;
-    
-    if (pan < -0.3) {
-      return <div className="text-6xl font-black text-sonar-safe animate-pulse">←</div>;
-    } else if (pan > 0.3) {
-      return <div className="text-6xl font-black text-sonar-safe animate-pulse">→</div>;
-    } else {
-      return <div className="text-6xl font-black text-sonar-safe animate-pulse">↑</div>;
-    }
+    if (pan < -0.3) return <div className="text-6xl font-black text-sonar-safe animate-pulse">←</div>;
+    if (pan > 0.3) return <div className="text-6xl font-black text-sonar-safe animate-pulse">→</div>;
+    return <div className="text-6xl font-black text-sonar-safe animate-pulse">↑</div>;
   };
 
   return (
     <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none transition-colors duration-200 ${getAlertBg()}`}>
       
-      {/* Hidden processing canvas */}
       <canvas ref={processingCanvasRef} width={512} height={512} className="hidden" />
 
-      {/* Language List Overlay */}
+      {/* Language Overlay */}
       {showLangList && (
         <div className="absolute inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md animate-in fade-in duration-200">
           <h2 className="text-sonar-white font-mono text-2xl font-bold mb-8 tracking-widest border-b border-zinc-800 pb-2">SELECT LANGUAGE</h2>
@@ -478,16 +473,11 @@ const App: React.FC = () => {
               </button>
             ))}
           </div>
-          <button 
-            onClick={() => setShowLangList(false)}
-            className="mt-8 px-8 py-3 rounded border border-zinc-700 text-zinc-400 font-mono text-sm hover:text-white hover:border-white transition-colors"
-          >
-            CANCEL
-          </button>
+          <button onClick={() => setShowLangList(false)} className="mt-8 px-8 py-3 rounded border border-zinc-700 text-zinc-400 font-mono text-sm">CANCEL</button>
         </div>
       )}
 
-      {/* 1. Viewport Layer - Border pulses yellow during AI processing */}
+      {/* Viewport */}
       <div className={`absolute inset-4 z-0 border-4 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black transition-colors duration-300 ${
            emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 
            isProcessingState ? 'border-sonar-yellow animate-pulse bg-black' : 
@@ -502,36 +492,33 @@ const App: React.FC = () => {
          />
          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
          
-         {/* Scanning Animation Line */}
          {appState === AppState.SCANNING && !emergencyLatch && (
            <div className="absolute left-0 w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,102,0.8)] animate-scan pointer-events-none" />
          )}
 
-         {/* Center Crosshair or Direction */}
          <div className="absolute z-30 pointer-events-none drop-shadow-lg">
             {renderDirectionIndicator() || <div className="text-sonar-white/30 text-2xl">+</div>}
          </div>
+         
+         {!modelLoaded && !emergencyLatch && (
+            <div className="absolute top-4 right-4 text-xs font-mono text-zinc-500">LOADING TENSORFLOW...</div>
+         )}
       </div>
 
-      {/* 2. HUD Layer */}
+      {/* HUD */}
       <div className="absolute inset-0 z-20 flex flex-col justify-between p-6 pointer-events-none">
         
-        {/* Top Header */}
         <div className="flex justify-between items-start pointer-events-auto">
           <div>
             <div className="flex items-center gap-3">
                <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
-               
-               <button 
-                 onClick={() => setShowLangList(true)}
-                 className="bg-zinc-900/90 border border-zinc-700 text-sonar-yellow font-mono text-xs font-bold px-3 py-1 rounded hover:bg-zinc-800 active:scale-95 transition-all flex items-center gap-1 shadow-lg"
-                 aria-label="Select Language"
-               >
-                 <span>{currentLang.label}</span>
-                 <span className="text-[10px] opacity-70">▼</span>
+               <button onClick={() => setShowLangList(true)} className="bg-zinc-900/90 border border-zinc-700 text-sonar-yellow font-mono text-xs font-bold px-3 py-1 rounded hover:bg-zinc-800 active:scale-95 transition-all flex items-center gap-1 shadow-lg">
+                 <span>{currentLang.label}</span><span className="text-[10px] opacity-70">▼</span>
                </button>
             </div>
-            <p className="text-xs text-zinc-500 font-mono tracking-widest mt-1">SPATIAL NAV ENGINE v1.0</p>
+            <p className="text-xs text-zinc-500 font-mono tracking-widest mt-1">
+                GEMINI 3 PRO + COCO-SSD
+            </p>
           </div>
           
           <div className="flex flex-col items-end">
@@ -547,7 +534,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Dynamic Instruction Card */}
         <div className="flex justify-center items-center">
            {lastResponse && (
              <div className="bg-black/80 backdrop-blur-sm border-l-4 border-sonar-yellow px-6 py-4 max-w-sm rounded-r-lg shadow-lg transform transition-all duration-300">
@@ -564,9 +550,7 @@ const App: React.FC = () => {
            )}
         </div>
 
-        {/* 3. Control Layer (Pointer Events Enabled) */}
         <div className="grid grid-cols-5 gap-4 pointer-events-auto h-24 mb-4">
-           {/* Voice Command (Hold) */}
            <button
              onMouseDown={startListening}
              onMouseUp={stopListening}
@@ -575,7 +559,7 @@ const App: React.FC = () => {
              disabled={isProcessingState || emergencyLatch}
              className={`col-span-2 rounded-xl font-bold text-lg flex flex-col items-center justify-center border-2 transition-all active:scale-95 ${
                appState === AppState.LISTENING 
-               ? 'bg-sonar-white text-black border-sonar-white shadow-[0_0_20px_rgba(255,255,255,0.4)]' 
+               ? 'bg-sonar-white text-black border-sonar-white' 
                : emergencyLatch 
                   ? 'bg-zinc-900/50 text-zinc-600 border-zinc-800 cursor-not-allowed'
                   : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:border-sonar-white'
@@ -587,7 +571,6 @@ const App: React.FC = () => {
 
            <div className="col-span-1"></div>
 
-           {/* Toggle Power */}
            <button
              onClick={toggleNavigation}
              className={`col-span-2 rounded-xl font-black text-xl flex items-center justify-center border-2 transition-all active:scale-95 shadow-lg ${
@@ -601,7 +584,6 @@ const App: React.FC = () => {
              {emergencyLatch ? 'RESET SYSTEM' : appState === AppState.SCANNING ? 'STOP' : 'START'}
            </button>
         </div>
-
       </div>
     </div>
   );
