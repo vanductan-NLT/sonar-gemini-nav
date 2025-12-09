@@ -1,7 +1,9 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { SonarResponse } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Support both standard API_KEY and GEMINI_API_KEY as requested
+const apiKey = process.env.API_KEY || (process.env as any).GEMINI_API_KEY;
+const ai = new GoogleGenAI({ apiKey: apiKey });
 
 const SYSTEM_INSTRUCTION = `
 **Role:** SonarAI, a spatial navigation engine.
@@ -76,7 +78,7 @@ export const analyzeFrame = async (base64Image: string, language: string = 'Engl
     });
 
     if (response.text) {
-      // Robust cleaning just in case model ignores "No Markdown" instruction
+      // Robust cleaning just in case model ignores "No Markdown" instruction or wraps it
       let cleanText = response.text.replace(/```json/g, "").replace(/```/g, "").trim();
       return JSON.parse(cleanText) as SonarResponse;
     }
