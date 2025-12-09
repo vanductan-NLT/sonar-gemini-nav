@@ -72,7 +72,14 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadModel = async () => {
       try {
-        await tf.ready();
+        // tf.ready() checks if the backend is set. 
+        // We catch errors to prevent "Platform already set" from stopping the app.
+        try {
+            await tf.ready();
+        } catch (e) {
+            console.warn("TF Ready warning:", e);
+        }
+        
         const model = await cocoSsd.load({ base: 'lite_mobilenet_v2' }); // Use lite model for speed
         netRef.current = model;
         setModelLoaded(true);
@@ -93,16 +100,18 @@ const App: React.FC = () => {
   const speak = useCallback(async (text: string, useHighQuality = false) => {
     if (!text) return;
     
+    // Basic SpeechSynthesis (Offline / Fallback)
     if (!useHighQuality && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.2; 
+      utterance.rate = 1.1; 
       utterance.pitch = 1.0;
       utterance.lang = currentLang.locale; 
       window.speechSynthesis.speak(utterance);
       return;
     }
 
+    // High Quality Neural TTS
     if (useHighQuality) {
        const audioBase64 = await generateSpeech(text);
        const ctx = getAudioContext();
@@ -202,7 +211,10 @@ const App: React.FC = () => {
             // 3. Render TFJS Detections (Tactical Layer - Cyan)
             if (appState === AppState.SCANNING && !emergencyLatch && detectedObjectsRef.current) {
                 detectedObjectsRef.current.forEach(obj => {
-                    drawBox(obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[3], '#00FFFF', `${obj.class} ${(obj.score*100).toFixed(0)}%`, false);
+                    // Filter out less important objects to reduce noise for visually impaired
+                    if (['person', 'car', 'chair', 'door', 'couch', 'tv', 'laptop'].includes(obj.class) || obj.score > 0.7) {
+                        drawBox(obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[3], '#00FFFF', `${obj.class}`, false);
+                    }
                 });
             }
 
@@ -275,9 +287,10 @@ const App: React.FC = () => {
                 speak(`Caution. ${response.navigation_command}`);
             } else {
                 playSonarPing(response.stereo_pan);
-                // Only speak navigation command periodically or if changed significantly? 
-                // For now, keep it terse.
-                // speak(response.navigation_command); 
+                // Safe status: infrequent updates or just pings
+                if (Math.random() > 0.7) {
+                     speak(response.navigation_command);
+                }
             }
         }
       } catch (e) {
@@ -331,6 +344,10 @@ const App: React.FC = () => {
       };
 
       mediaRecorder.start();
+    }).catch(err => {
+        console.error("Mic access denied", err);
+        speak("Microphone access denied.");
+        setAppState(AppState.IDLE);
     });
   };
 
