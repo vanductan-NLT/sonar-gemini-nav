@@ -3,7 +3,7 @@ let audioCtx: AudioContext | null = null;
 
 export const getAudioContext = () => {
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
   }
   if (audioCtx.state === 'suspended') {
     audioCtx.resume().catch(e => console.error("Audio resume failed", e));
@@ -30,6 +30,40 @@ export const playBeep = (freq: number = 440, duration: number = 100, type: Oscil
 
   osc.start();
   osc.stop(ctx.currentTime + duration / 1000);
+};
+
+// Play raw PCM audio from Gemini TTS (16-bit, 24kHz usually)
+export const playRawPCM = async (base64Data: string, sampleRate = 24000) => {
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  try {
+    const binaryString = atob(base64Data);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Convert Int16 PCM to Float32
+    const int16Data = new Int16Array(bytes.buffer);
+    const float32Data = new Float32Array(int16Data.length);
+    
+    for (let i = 0; i < int16Data.length; i++) {
+      // Normalize 16-bit integer to -1.0 to 1.0 float
+      float32Data[i] = int16Data[i] / 32768.0;
+    }
+
+    const buffer = ctx.createBuffer(1, float32Data.length, sampleRate);
+    buffer.getChannelData(0).set(float32Data);
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start();
+  } catch (e) {
+    console.error("Error playing raw PCM", e);
+  }
 };
 
 export const playCautionSound = (pan: number) => {

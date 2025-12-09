@@ -3,7 +3,7 @@ import Webcam from 'react-webcam';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { analyzeFrame, transcribeAudio, generateSpeech } from './services/geminiService';
-import { playBeep, playSonarPing, playCautionSound, getAudioContext } from './utils/audioUtils';
+import { playBeep, playSonarPing, playCautionSound, getAudioContext, playRawPCM } from './utils/audioUtils';
 import { SonarResponse, AppState } from './types';
 
 // Helper for converting blobs to base64
@@ -11,10 +11,15 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64 = (reader.result as string).split(',')[1];
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      console.log(`[App] Blob converted to Base64. Size: ${base64.length}`);
       resolve(base64);
     };
-    reader.onerror = reject;
+    reader.onerror = (e) => {
+        console.error("[App] Blob conversion error", e);
+        reject(e);
+    };
     reader.readAsDataURL(blob);
   });
 };
@@ -72,8 +77,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadModel = async () => {
       try {
+        console.log("[App] Loading TFJS Model...");
         // tf.ready() checks if the backend is set. 
-        // We catch errors to prevent "Platform already set" from stopping the app.
         try {
             await tf.ready();
         } catch (e) {
@@ -83,9 +88,9 @@ const App: React.FC = () => {
         const model = await cocoSsd.load({ base: 'lite_mobilenet_v2' }); // Use lite model for speed
         netRef.current = model;
         setModelLoaded(true);
-        console.log("COCO-SSD Loaded");
+        console.log("[App] COCO-SSD Loaded Successfully");
       } catch (err) {
-        console.error("Failed to load COCO-SSD", err);
+        console.error("[App] Failed to load COCO-SSD", err);
       }
     };
     loadModel();
@@ -99,6 +104,7 @@ const App: React.FC = () => {
   // --- Voice Output ---
   const speak = useCallback(async (text: string, useHighQuality = false) => {
     if (!text) return;
+    console.log(`[App] Speaking: "${text}" (HighQuality: ${useHighQuality})`);
     
     // Basic SpeechSynthesis (Offline / Fallback)
     if (!useHighQuality && window.speechSynthesis) {
@@ -114,30 +120,21 @@ const App: React.FC = () => {
     // High Quality Neural TTS
     if (useHighQuality) {
        const audioBase64 = await generateSpeech(text);
-       const ctx = getAudioContext();
-       if (audioBase64 && ctx) {
-         try {
-           const binaryString = atob(audioBase64);
-           const len = binaryString.length;
-           const bytes = new Uint8Array(len);
-           for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
-           
-           const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
-           const source = ctx.createBufferSource();
-           source.buffer = audioBuffer;
-           source.connect(ctx.destination);
-           source.start(0);
-         } catch (e) {
-           console.error("Audio decode error", e);
-           const utterance = new SpeechSynthesisUtterance(text);
-           utterance.lang = currentLang.locale;
-           window.speechSynthesis.speak(utterance);
-         }
+       if (audioBase64) {
+         // Use the raw PCM player
+         await playRawPCM(audioBase64);
+       } else {
+         console.warn("[App] High quality speech failed, falling back to synthesis");
+         // Fallback
+         const utterance = new SpeechSynthesisUtterance(text);
+         utterance.lang = currentLang.locale;
+         window.speechSynthesis.speak(utterance);
        }
     }
   }, [currentLang.locale]);
 
   const selectLanguage = (index: number) => {
+    console.log(`[App] Switching language to ${LANGUAGES[index].name}`);
     setLangIndex(index);
     setShowLangList(false);
     const newLang = LANGUAGES[index];
@@ -263,7 +260,10 @@ const App: React.FC = () => {
       if (!webcam) return;
       
       const screenshot = webcam.getScreenshot();
-      if (!screenshot) return;
+      if (!screenshot) {
+          console.warn("[App] Screenshot failed or empty");
+          return;
+      }
       
       isProcessingRef.current = true;
       setIsProcessingState(true);
@@ -271,11 +271,13 @@ const App: React.FC = () => {
       const base64Image = screenshot.split(',')[1];
       
       try {
+        console.log("[App] Starting Gemini Cycle...");
         playBeep(880, 50, 'sine'); // Scanning blip
         
         const response = await analyzeFrame(base64Image, currentLang.name);
         
         if (response) {
+            console.log("[App] Gemini Analysis Complete:", response.safety_status);
             setLastResponse(response);
             
             // Audio Feedback Logic
@@ -302,8 +304,8 @@ const App: React.FC = () => {
     };
 
     if (appState === AppState.SCANNING) {
-      // Run every 2.5 seconds to balance latency and cost
-      intervalId = setInterval(runGeminiCycle, 2500); 
+      // Run every 6.0 seconds to balance latency and cost/quota
+      intervalId = setInterval(runGeminiCycle, 6000); 
       runGeminiCycle(); // Run immediately on start
     }
 
@@ -316,10 +318,12 @@ const App: React.FC = () => {
   const toggleScanning = () => {
     initAudio();
     if (appState === AppState.SCANNING) {
+      console.log("[App] Pausing Scanning");
       setAppState(AppState.IDLE);
       setLastResponse(null);
       speak("System Paused");
     } else {
+      console.log("[App] Starting Scanning");
       setAppState(AppState.SCANNING);
       speak("Sonar Active");
     }
@@ -332,6 +336,7 @@ const App: React.FC = () => {
        setAppState(AppState.LISTENING);
     }
     playBeep(600, 100); 
+    console.log("[App] Start Listening (Microphone)");
     
     // Start Audio Recording
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
@@ -340,10 +345,13 @@ const App: React.FC = () => {
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data);
+        if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+        }
       };
 
       mediaRecorder.start();
+      console.log(`[App] MediaRecorder Started. MimeType: ${mediaRecorder.mimeType}`);
     }).catch(err => {
         console.error("Mic access denied", err);
         speak("Microphone access denied.");
@@ -352,34 +360,52 @@ const App: React.FC = () => {
   };
 
   const stopListening = async () => {
+    console.log("[App] Stop Listening triggered");
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
+      // Get the correct mime type
+      const mimeType = mediaRecorderRef.current.mimeType || 'audio/webm';
+      
       mediaRecorderRef.current.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const totalSize = audioChunksRef.current.reduce((acc, chunk) => acc + chunk.size, 0);
+        console.log(`[App] Recording finished. Total Size: ${totalSize} bytes`);
+
+        // Prevent processing empty or extremely short audio (clicks)
+        if (totalSize < 5000) { // < 5KB is likely just a click/noise
+            console.warn("[App] Audio too short, skipping transcription.");
+            playBeep(200, 100); // Error low beep
+            setAppState(AppState.IDLE);
+            return;
+        }
+
+        // Create blob with correct mime type
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const base64Audio = await blobToBase64(audioBlob);
         
         playBeep(400, 100); // End beep
         speak("Processing...");
         setIsProcessingState(true);
 
-        const transcript = await transcribeAudio(base64Audio, currentLang.name);
+        const transcript = await transcribeAudio(base64Audio, mimeType, currentLang.name);
         
         // One-off query with the transcribed text context
         if (webcamRef.current) {
             const screenshot = webcamRef.current.getScreenshot();
             if (screenshot && transcript) {
+                console.log(`[App] Sending Query with context: "${transcript}"`);
                 const base64Image = screenshot.split(',')[1];
                 const response = await analyzeFrame(base64Image, currentLang.name, `User Question: "${transcript}"`);
                 
                 setLastResponse(response);
                 speak(response.reasoning_summary, true);
             } else {
+                console.warn("[App] Missing screenshot or transcript");
                 speak("I couldn't hear you clearly.");
             }
         }
         
         setIsProcessingState(false);
-        // Return to scanning if we were scanning before (simplification: just go IDLE to let user decide)
+        // Return to scanning if we were scanning before
         setAppState(AppState.IDLE); 
       };
     }
