@@ -200,10 +200,8 @@ const App: React.FC = () => {
             };
 
             // 3. Render TFJS Detections (Tactical Layer - Cyan)
-            // Filter out common overlaps if needed, or just draw all
             if (appState === AppState.SCANNING && !emergencyLatch && detectedObjectsRef.current) {
                 detectedObjectsRef.current.forEach(obj => {
-                    // Ignore persons if we have Gemini data to avoid clutter, or keep them for raw tracking
                     drawBox(obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[3], '#00FFFF', `${obj.class} ${(obj.score*100).toFixed(0)}%`, false);
                 });
             }
@@ -213,7 +211,7 @@ const App: React.FC = () => {
             if (geminiData) {
                 if (geminiData.visual_debug?.hazards) {
                     geminiData.visual_debug.hazards.forEach(h => {
-                        if (!h.box_2d) return; // Safety check
+                        if (!h.box_2d) return; 
                         const [ymin, xmin, ymax, xmax] = h.box_2d;
                         const x = (xmin / 1000) * canvas.width;
                         const y = (ymin / 1000) * canvas.height;
@@ -224,367 +222,284 @@ const App: React.FC = () => {
                 }
                 if (geminiData.visual_debug?.safe_path) {
                     geminiData.visual_debug.safe_path.forEach(p => {
-                        if (!p.box_2d) return; // Safety check
+                        if (!p.box_2d) return; 
                         const [ymin, xmin, ymax, xmax] = p.box_2d;
                         const x = (xmin / 1000) * canvas.width;
                         const y = (ymin / 1000) * canvas.height;
                         const w = ((xmax - xmin) / 1000) * canvas.width;
                         const hBox = ((ymax - ymin) / 1000) * canvas.height;
-                        
-                        let label = p.label || 'SAFE PATH';
-                        if (label.toUpperCase() === 'PATH') label = 'SAFE PATH';
-                        drawBox(x, y, w, hBox, '#00FF66', label, true);
+                        drawBox(x, y, w, hBox, '#00FF66', p.label || 'PATH', true);
                     });
                 }
-                
-                // Draw Pan Indicator
-                drawPanIndicator(ctx, canvas.width, canvas.height, geminiData);
             }
         }
       }
       animationFrameIdRef.current = requestAnimationFrame(loop);
     };
-
-    animationFrameIdRef.current = requestAnimationFrame(loop);
+    loop();
     return () => cancelAnimationFrame(animationFrameIdRef.current);
   }, [appState, emergencyLatch]);
 
-  const drawPanIndicator = (ctx: CanvasRenderingContext2D, w: number, h: number, data: SonarResponse) => {
-    const pan = data.stereo_pan;
-    const cy = h * 0.93;
-    const cx = w / 2;
-    const barW = w * 0.6;
-    
-    // Track
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 4;
-    ctx.lineCap = 'round';
-    ctx.moveTo(cx - barW/2, cy);
-    ctx.lineTo(cx + barW/2, cy);
-    ctx.stroke();
-
-    // Indicator
-    const ix = cx + (Math.max(-1, Math.min(1, pan)) * (barW/2));
-    let color = '#00FF66';
-    if (data.safety_status === 'CAUTION') color = '#FFD700';
-    if (data.safety_status === 'STOP') color = '#FF3333';
-
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(ix, cy, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  };
-
-  // --- Gemini Navigation Loop (Recursive) ---
-  const runNavigationLoop = useCallback(async () => {
-    if (appState !== AppState.SCANNING || isProcessingRef.current || !webcamRef.current || emergencyLatch) return;
-
-    const video = webcamRef.current.video;
-    if (!video || video.readyState !== 4) {
-        requestAnimationFrame(() => runNavigationLoop());
-        return;
-    }
-
-    isProcessingRef.current = true;
-    setIsProcessingState(true);
-
-    let base64Image = "";
-    // Optimize Image for Cloud
-    if (processingCanvasRef.current) {
-        const pCtx = processingCanvasRef.current.getContext('2d');
-        if (pCtx) {
-            pCtx.drawImage(video, 0, 0, 512, 512);
-            base64Image = processingCanvasRef.current.toDataURL('image/jpeg', 0.6).split(',')[1];
-        }
-    }
-
-    try {
-      const data = await analyzeFrame(base64Image, currentLang.name);
-      setLastResponse(data);
-      
-      const combinedText = data.reasoning_summary 
-        ? `${data.navigation_command}. ${data.reasoning_summary}`
-        : data.navigation_command;
-      
-      // Throttle speech: Only speak if critical or simple command
-      const voiceMessage = (data.safety_status !== 'SAFE' || !lastResponseRef.current) 
-        ? combinedText 
-        : data.navigation_command;
-
-      if (data.safety_status === 'STOP') {
-        setEmergencyLatch(true);
-        playBeep(1000, 500, 'sawtooth');
-        speak(voiceMessage, false);
-      } else if (data.safety_status === 'CAUTION') {
-        playCautionSound(data.stereo_pan);
-        speak(voiceMessage, false);
-      } else {
-        playSonarPing(data.stereo_pan);
-        speak(voiceMessage, false);
-      }
-    } catch (error) {
-      console.error("Gemini Loop Error", error);
-    } finally {
-      isProcessingRef.current = false;
-      setIsProcessingState(false);
-      // Loop
-      if (appState === AppState.SCANNING && !emergencyLatch) {
-         requestAnimationFrame(() => runNavigationLoop()); 
-      }
-    }
-  }, [appState, speak, emergencyLatch, currentLang.name]);
-
-  // Trigger Gemini Loop
+  // --- Gemini Intelligence Loop ---
   useEffect(() => {
-    if (appState === AppState.SCANNING && !emergencyLatch) {
-      runNavigationLoop();
-    }
-    return () => {
+    let intervalId: NodeJS.Timeout;
+
+    const runGeminiCycle = async () => {
+      if (appState !== AppState.SCANNING || isProcessingRef.current || emergencyLatch) return;
+      
+      const webcam = webcamRef.current;
+      if (!webcam) return;
+      
+      const screenshot = webcam.getScreenshot();
+      if (!screenshot) return;
+      
+      isProcessingRef.current = true;
+      setIsProcessingState(true);
+
+      const base64Image = screenshot.split(',')[1];
+      
+      try {
+        playBeep(880, 50, 'sine'); // Scanning blip
+        
+        const response = await analyzeFrame(base64Image, currentLang.name);
+        
+        if (response) {
+            setLastResponse(response);
+            
+            // Audio Feedback Logic
+            if (response.safety_status === 'STOP') {
+                playCautionSound(response.stereo_pan);
+                speak(`STOP. ${response.reasoning_summary}`, true);
+            } else if (response.safety_status === 'CAUTION') {
+                playSonarPing(response.stereo_pan);
+                speak(`Caution. ${response.navigation_command}`);
+            } else {
+                playSonarPing(response.stereo_pan);
+                // Only speak navigation command periodically or if changed significantly? 
+                // For now, keep it terse.
+                // speak(response.navigation_command); 
+            }
+        }
+      } catch (e) {
+        console.error("Gemini Cycle Error", e);
+      } finally {
         isProcessingRef.current = false;
         setIsProcessingState(false);
+      }
     };
-  }, [appState, emergencyLatch, runNavigationLoop]);
 
-
-  // --- User Input & UI Methods ---
-  const startListening = async () => {
-    if (emergencyLatch) return;
-    if (appState === AppState.SCANNING) setAppState(AppState.IDLE);
-    setAppState(AppState.LISTENING);
-    playBeep(600, 100);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorderRef.current = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-      mediaRecorderRef.current.ondataavailable = (event) => audioChunksRef.current.push(event.data);
-      mediaRecorderRef.current.onstop = async () => {
-        try {
-          if (audioChunksRef.current.length === 0) return;
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-          const base64Audio = await blobToBase64(audioBlob);
-          setAppState(AppState.PROCESSING_QUERY);
-          setIsProcessingState(true);
-          const query = await transcribeAudio(base64Audio, currentLang.name);
-          
-          if (query && webcamRef.current) {
-            const imageSrc = webcamRef.current.getScreenshot();
-            if (imageSrc) {
-               const base64Image = imageSrc.split(',')[1];
-               speak("Processing", false);
-               const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input.`);
-               setLastResponse(response);
-               speak(response.navigation_command + " " + response.reasoning_summary, true);
-            }
-          } else {
-              speak("Unclear.", false);
-          }
-        } catch (error) {
-          console.error("Query Error", error);
-        } finally {
-          setAppState(AppState.IDLE);
-          setIsProcessingState(false);
-        }
-      };
-      mediaRecorderRef.current.start();
-    } catch (e) {
-      console.error("Mic error", e);
-      setAppState(AppState.IDLE);
+    if (appState === AppState.SCANNING) {
+      // Run every 2.5 seconds to balance latency and cost
+      intervalId = setInterval(runGeminiCycle, 2500); 
+      runGeminiCycle(); // Run immediately on start
     }
-  };
 
-  const stopListening = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      playBeep(400, 100);
-    }
-  };
+    return () => clearInterval(intervalId);
+  }, [appState, emergencyLatch, currentLang, speak]);
 
-  const toggleNavigation = () => {
+
+  // --- User Interactions ---
+
+  const toggleScanning = () => {
     initAudio();
-    if (emergencyLatch) {
-      setEmergencyLatch(false);
-      setAppState(AppState.IDLE);
-      setLastResponse(null);
-      detectedObjectsRef.current = [];
-      speak("System Reset", false);
-      return;
-    }
     if (appState === AppState.SCANNING) {
       setAppState(AppState.IDLE);
-      speak("Paused", false);
       setLastResponse(null);
-      detectedObjectsRef.current = [];
+      speak("System Paused");
     } else {
       setAppState(AppState.SCANNING);
-      speak("Scanning", false);
+      speak("Sonar Active");
     }
   };
 
-  const getStatusColor = () => {
-    if (emergencyLatch) return 'text-sonar-alert';
-    if (lastResponse?.safety_status === 'STOP') return 'text-sonar-alert';
-    if (lastResponse?.safety_status === 'CAUTION') return 'text-sonar-yellow';
-    return 'text-sonar-safe';
+  const startListening = () => {
+    initAudio();
+    if (appState === AppState.SCANNING) {
+       // Pause scanning while listening
+       setAppState(AppState.LISTENING);
+    }
+    playBeep(600, 100); 
+    
+    // Start Audio Recording
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        audioChunksRef.current.push(event.data);
+      };
+
+      mediaRecorder.start();
+    });
   };
 
-  const getAlertBg = () => {
-    if (emergencyLatch) return 'bg-red-600 animate-flash';
-    if (lastResponse?.safety_status === 'STOP') return 'bg-red-900/50 animate-pulse';
-    return '';
-  };
+  const stopListening = async () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const base64Audio = await blobToBase64(audioBlob);
+        
+        playBeep(400, 100); // End beep
+        speak("Processing...");
+        setIsProcessingState(true);
 
-  const renderDirectionIndicator = () => {
-    if (emergencyLatch) return <div className="text-8xl font-black text-white animate-pulse">STOP</div>;
-    if (!lastResponse || appState !== AppState.SCANNING) return null;
-    const pan = lastResponse.stereo_pan;
-    if (pan < -0.3) return <div className="text-6xl font-black text-sonar-safe animate-pulse">←</div>;
-    if (pan > 0.3) return <div className="text-6xl font-black text-sonar-safe animate-pulse">→</div>;
-    return <div className="text-6xl font-black text-sonar-safe animate-pulse">↑</div>;
+        const transcript = await transcribeAudio(base64Audio, currentLang.name);
+        
+        // One-off query with the transcribed text context
+        if (webcamRef.current) {
+            const screenshot = webcamRef.current.getScreenshot();
+            if (screenshot && transcript) {
+                const base64Image = screenshot.split(',')[1];
+                const response = await analyzeFrame(base64Image, currentLang.name, `User Question: "${transcript}"`);
+                
+                setLastResponse(response);
+                speak(response.reasoning_summary, true);
+            } else {
+                speak("I couldn't hear you clearly.");
+            }
+        }
+        
+        setIsProcessingState(false);
+        // Return to scanning if we were scanning before (simplification: just go IDLE to let user decide)
+        setAppState(AppState.IDLE); 
+      };
+    }
   };
 
   return (
-    <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none transition-colors duration-200 ${getAlertBg()}`}>
-      
-      <canvas ref={processingCanvasRef} width={512} height={512} className="hidden" />
+    <div className="relative w-screen h-screen bg-sonar-black text-sonar-white overflow-hidden font-mono">
+      {/* Background Grid */}
+      <div className="absolute inset-0 bg-grid opacity-20 pointer-events-none"></div>
 
-      {/* Language Overlay */}
-      {showLangList && (
-        <div className="absolute inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md animate-in fade-in duration-200">
-          <h2 className="text-sonar-white font-mono text-2xl font-bold mb-8 tracking-widest border-b border-zinc-800 pb-2">SELECT LANGUAGE</h2>
-          <div className="grid grid-cols-1 gap-4 w-full max-w-sm h-3/4 overflow-y-auto">
-            {LANGUAGES.map((lang, index) => (
-              <button
-                key={lang.code}
-                onClick={() => selectLanguage(index)}
-                className={`p-5 rounded-lg border-2 font-mono text-xl font-bold tracking-wider transition-all active:scale-95 flex justify-between items-center ${
-                  index === langIndex 
-                    ? 'border-sonar-yellow text-sonar-black bg-sonar-yellow shadow-[0_0_20px_rgba(255,215,0,0.4)]' 
-                    : 'border-zinc-800 text-zinc-400 bg-zinc-900/50 hover:border-sonar-white hover:text-sonar-white'
-                }`}
-              >
-                <div className="flex items-center gap-4">
-                    <span className="text-2xl">{lang.flag}</span>
-                    <span>{lang.name.toUpperCase()}</span>
-                </div>
-                {index === langIndex && <span>●</span>}
-              </button>
-            ))}
-          </div>
-          <button onClick={() => setShowLangList(false)} className="mt-8 px-8 py-3 rounded border border-zinc-700 text-zinc-400 font-mono text-sm">CANCEL</button>
+      {/* Camera Layer */}
+      <div className="absolute inset-0 z-0">
+        <Webcam
+          ref={webcamRef}
+          audio={false}
+          screenshotFormat="image/jpeg"
+          videoConstraints={{ facingMode: "environment" }}
+          className="w-full h-full object-cover opacity-60"
+        />
+      </div>
+
+      {/* Canvas Overlay */}
+      <canvas 
+        ref={canvasRef} 
+        className="absolute inset-0 z-10 pointer-events-none"
+      />
+
+      {/* Header */}
+      <div className="absolute top-0 left-0 w-full p-4 z-20 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent">
+        <div className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${appState === AppState.SCANNING ? 'bg-sonar-safe animate-pulse' : 'bg-gray-500'}`}></div>
+            <h1 className="text-xl font-bold tracking-widest text-sonar-white">SONAR<span className="text-sonar-yellow">AI</span></h1>
         </div>
-      )}
+        
+        <div className="relative">
+            <button 
+                onClick={() => setShowLangList(!showLangList)}
+                className="bg-sonar-panel border border-gray-700 px-3 py-1 rounded-full text-sm font-bold flex items-center gap-2"
+            >
+                <span>{currentLang.flag}</span>
+                <span>{currentLang.label}</span>
+            </button>
+            
+            {showLangList && (
+                <div className="absolute top-full right-0 mt-2 bg-sonar-panel border border-gray-700 rounded-xl overflow-hidden shadow-xl w-32">
+                    {LANGUAGES.map((lang, idx) => (
+                        <button 
+                            key={lang.code}
+                            onClick={() => selectLanguage(idx)}
+                            className="w-full text-left px-4 py-2 hover:bg-gray-800 flex gap-2"
+                        >
+                            <span>{lang.flag}</span>
+                            <span>{lang.label}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+      </div>
 
-      {/* Viewport */}
-      <div className={`absolute inset-4 z-0 border-4 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black transition-colors duration-300 ${
-           emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 
-           isProcessingState ? 'border-sonar-yellow animate-pulse bg-black' : 
-           'border-zinc-800 bg-black'
-      }`}>
-         <Webcam
-           ref={webcamRef}
-           audio={false}
-           screenshotFormat="image/jpeg"
-           videoConstraints={{ facingMode: "environment" }}
-           className="w-full h-full object-contain opacity-90"
-         />
-         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-contain pointer-events-none" />
-         
-         {appState === AppState.SCANNING && !emergencyLatch && (
-           <div className="absolute left-0 w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,102,0.8)] animate-scan pointer-events-none" />
-         )}
-
-         <div className="absolute z-30 pointer-events-none drop-shadow-lg">
-            {renderDirectionIndicator() || <div className="text-sonar-white/30 text-2xl">+</div>}
-         </div>
-         
-         {!modelLoaded && !emergencyLatch && (
-            <div className="absolute top-4 right-4 text-xs font-mono text-zinc-500">LOADING TENSORFLOW...</div>
+      {/* Main Status HUD */}
+      <div className="absolute top-20 left-4 right-4 z-20">
+         {lastResponse ? (
+             <div className={`p-4 rounded-xl border-l-4 backdrop-blur-md bg-black/60 shadow-lg transition-colors duration-500 ${
+                 lastResponse.safety_status === 'STOP' ? 'border-sonar-alert' : 
+                 lastResponse.safety_status === 'CAUTION' ? 'border-sonar-yellow' : 'border-sonar-safe'
+             }`}>
+                 <div className="flex justify-between items-start mb-1">
+                     <span className={`text-2xl font-black tracking-tighter ${
+                         lastResponse.safety_status === 'STOP' ? 'text-sonar-alert animate-pulse' : 
+                         lastResponse.safety_status === 'CAUTION' ? 'text-sonar-yellow' : 'text-sonar-safe'
+                     }`}>
+                         {lastResponse.safety_status}
+                     </span>
+                     <span className="text-xs text-gray-400 font-sans mt-2">PAN: {lastResponse.stereo_pan.toFixed(1)}</span>
+                 </div>
+                 <p className="text-lg font-bold leading-tight mb-2">{lastResponse.navigation_command}</p>
+                 <p className="text-sm text-gray-300 font-sans border-t border-gray-700 pt-2 mt-1 opacity-80">{lastResponse.reasoning_summary}</p>
+             </div>
+         ) : (
+             <div className="p-4 rounded-xl border-l-4 border-gray-500 backdrop-blur-md bg-black/60">
+                 <p className="text-gray-400">System Standby. Press Start.</p>
+             </div>
          )}
       </div>
 
-      {/* HUD */}
-      <div className="absolute inset-0 z-20 flex flex-col justify-between p-6 pointer-events-none">
+      {/* Scanner Animation Line */}
+      {appState === AppState.SCANNING && (
+        <div className="absolute inset-0 z-10 pointer-events-none overflow-hidden">
+            <div className="w-full h-1 bg-sonar-safe/50 shadow-[0_0_15px_rgba(0,255,100,0.8)] animate-scan"></div>
+        </div>
+      )}
+
+      {/* Bottom Controls */}
+      <div className="absolute bottom-0 left-0 w-full p-6 pb-10 z-30 bg-gradient-to-t from-black via-black/90 to-transparent flex flex-col gap-6 items-center">
         
-        <div className="flex justify-between items-start pointer-events-auto">
-          <div>
-            <div className="flex items-center gap-3">
-               <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
-               <button onClick={() => setShowLangList(true)} className="bg-zinc-900/90 border border-zinc-700 text-sonar-yellow font-mono text-xs font-bold px-3 py-1 rounded hover:bg-zinc-800 active:scale-95 transition-all flex items-center gap-1 shadow-lg">
-                 <span>{currentLang.label}</span><span className="text-[10px] opacity-70">▼</span>
-               </button>
+        {/* Processing Indicator */}
+        {isProcessingState && (
+            <div className="flex items-center gap-2 text-sonar-yellow animate-pulse mb-2">
+                <div className="w-2 h-2 bg-sonar-yellow rounded-full"></div>
+                <span className="text-xs uppercase tracking-widest">Processing</span>
             </div>
-            <p className="text-xs text-zinc-500 font-mono tracking-widest mt-1">
-                GEMINI 3 PRO + COCO-SSD
-            </p>
-          </div>
-          
-          <div className="flex flex-col items-end">
-             <div className="flex items-center gap-2 bg-black/80 px-3 py-1 rounded border border-zinc-800">
-                <div className={`w-3 h-3 rounded-full ${emergencyLatch ? 'bg-sonar-alert animate-ping' : appState === AppState.SCANNING ? 'bg-sonar-safe animate-pulse' : 'bg-zinc-600'}`}></div>
-                <span className="text-sm font-mono font-bold text-sonar-white">{emergencyLatch ? 'EMERGENCY' : appState}</span>
-             </div>
-             {lastResponse && (
-               <div className={`mt-2 text-xl font-black font-mono tracking-widest ${getStatusColor()}`}>
-                 [{emergencyLatch ? 'STOP' : lastResponse.safety_status}]
-               </div>
-             )}
-          </div>
-        </div>
+        )}
 
-        <div className="flex justify-center items-center">
-           {lastResponse && (
-             <div className="bg-black/80 backdrop-blur-sm border-l-4 border-sonar-yellow px-6 py-4 max-w-sm rounded-r-lg shadow-lg transform transition-all duration-300">
-                <p className="text-3xl font-bold text-white leading-tight">
-                   {lastResponse.navigation_command}
-                </p>
-                {isProcessingState && (
-                  <p className="text-sm font-mono text-sonar-yellow mt-2 animate-pulse">:: PROCESSING QUERY ::</p>
+        <div className="flex items-center gap-8 w-full justify-center">
+            {/* Start/Stop Button */}
+            <button
+                onClick={toggleScanning}
+                className={`w-20 h-20 rounded-full flex items-center justify-center border-4 shadow-[0_0_20px_rgba(0,0,0,0.5)] transition-all transform active:scale-95 ${
+                    appState === AppState.SCANNING 
+                    ? 'bg-sonar-alert border-sonar-alert text-black' 
+                    : 'bg-sonar-safe border-sonar-safe text-black'
+                }`}
+            >
+                {appState === AppState.SCANNING ? (
+                    <div className="w-8 h-8 bg-black rounded-sm"></div>
+                ) : (
+                    <div className="w-0 h-0 border-t-[12px] border-t-transparent border-l-[20px] border-l-black border-b-[12px] border-b-transparent ml-1"></div>
                 )}
-             </div>
-           )}
-           {appState === AppState.IDLE && !lastResponse && !emergencyLatch && (
-              <div className="text-zinc-600 font-mono text-sm animate-pulse">SYSTEM STANDBY</div>
-           )}
-        </div>
+            </button>
 
-        <div className="grid grid-cols-5 gap-4 pointer-events-auto h-24 mb-4">
-           <button
-             onMouseDown={startListening}
-             onMouseUp={stopListening}
-             onTouchStart={startListening}
-             onTouchEnd={stopListening}
-             disabled={isProcessingState || emergencyLatch}
-             className={`col-span-2 rounded-xl font-bold text-lg flex flex-col items-center justify-center border-2 transition-all active:scale-95 ${
-               appState === AppState.LISTENING 
-               ? 'bg-sonar-white text-black border-sonar-white' 
-               : emergencyLatch 
-                  ? 'bg-zinc-900/50 text-zinc-600 border-zinc-800 cursor-not-allowed'
-                  : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:border-sonar-white'
-             }`}
-           >
-             <span className="text-2xl mb-1">{appState === AppState.LISTENING ? '◉' : '○'}</span>
-             <span className="text-xs font-mono">HOLD TO SPEAK</span>
-           </button>
-
-           <div className="col-span-1"></div>
-
-           <button
-             onClick={toggleNavigation}
-             className={`col-span-2 rounded-xl font-black text-xl flex items-center justify-center border-2 transition-all active:scale-95 shadow-lg ${
-               emergencyLatch
-               ? 'bg-sonar-white text-black border-sonar-alert shadow-[0_0_30px_rgba(255,0,0,0.8)] animate-pulse'
-               : appState === AppState.SCANNING
-               ? 'bg-sonar-alert text-black border-sonar-alert shadow-[0_0_20px_rgba(255,51,51,0.5)]'
-               : 'bg-sonar-safe text-black border-sonar-safe shadow-[0_0_20px_rgba(0,255,102,0.3)]'
-             }`}
-           >
-             {emergencyLatch ? 'RESET SYSTEM' : appState === AppState.SCANNING ? 'STOP' : 'START'}
-           </button>
+            {/* Mic Button (Hold to Speak) */}
+            <button
+                onPointerDown={startListening}
+                onPointerUp={stopListening}
+                onPointerLeave={stopListening}
+                onContextMenu={(e) => e.preventDefault()} // Prevents right-click/long-press menu
+                className={`w-16 h-16 rounded-full flex items-center justify-center border-2 transition-all transform active:scale-90 ${
+                    appState === AppState.LISTENING
+                    ? 'bg-sonar-yellow border-sonar-yellow text-black scale-110 shadow-[0_0_30px_#FFD700]'
+                    : 'bg-transparent border-gray-500 text-gray-400'
+                }`}
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+            </button>
         </div>
       </div>
     </div>

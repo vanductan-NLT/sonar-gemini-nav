@@ -11,7 +11,7 @@
   "dependencies": {
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "@google/genai": "0.1.2",
+    "@google/genai": "latest",
     "react-webcam": "7.2.0",
     "@tensorflow/tfjs": "4.17.0",
     "@tensorflow-models/coco-ssd": "2.2.3"
