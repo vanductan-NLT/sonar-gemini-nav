@@ -201,7 +201,7 @@ const App: React.FC = () => {
 
             // 3. Render TFJS Detections (Tactical Layer - Cyan)
             // Filter out common overlaps if needed, or just draw all
-            if (appState === AppState.SCANNING && !emergencyLatch) {
+            if (appState === AppState.SCANNING && !emergencyLatch && detectedObjectsRef.current) {
                 detectedObjectsRef.current.forEach(obj => {
                     // Ignore persons if we have Gemini data to avoid clutter, or keep them for raw tracking
                     drawBox(obj.bbox[0], obj.bbox[1], obj.bbox[2], obj.bbox[3], '#00FFFF', `${obj.class} ${(obj.score*100).toFixed(0)}%`, false);
@@ -213,6 +213,7 @@ const App: React.FC = () => {
             if (geminiData) {
                 if (geminiData.visual_debug?.hazards) {
                     geminiData.visual_debug.hazards.forEach(h => {
+                        if (!h.box_2d) return; // Safety check
                         const [ymin, xmin, ymax, xmax] = h.box_2d;
                         const x = (xmin / 1000) * canvas.width;
                         const y = (ymin / 1000) * canvas.height;
@@ -223,6 +224,7 @@ const App: React.FC = () => {
                 }
                 if (geminiData.visual_debug?.safe_path) {
                     geminiData.visual_debug.safe_path.forEach(p => {
+                        if (!p.box_2d) return; // Safety check
                         const [ymin, xmin, ymax, xmax] = p.box_2d;
                         const x = (xmin / 1000) * canvas.width;
                         const y = (ymin / 1000) * canvas.height;

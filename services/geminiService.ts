@@ -5,8 +5,11 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const SYSTEM_INSTRUCTION = `
 **Role:** SonarAI, a spatial navigation engine.
-**Task:** Analyze the camera frame. Identify hazards and walkable paths.
-**Constraint:** Return ONLY valid minified JSON. Do NOT use Markdown code blocks. Do NOT include explanations outside the JSON.
+**Task:** Perform DEEP REASONING on the camera frame.
+1. **Safety Check:** Assess overall danger (e.g., wet floor, closing doors, traffic, obstacles).
+2. **Semantic Reading:** Read critical text (e.g., "EXIT", "Restroom", Warning signs).
+3. **Pathfinding:** Identify the safest walkable corridor.
+**Constraint:** Return ONLY valid minified JSON. Do NOT use Markdown code blocks.
 
 **JSON OUTPUT FORMAT:**
 {"safety_status":"SAFE"|"CAUTION"|"STOP","reasoning_summary":"<Max 5 words>","navigation_command":"<Max 5 words>","stereo_pan":<float -1.0 to 1.0>,"visual_debug":{"hazards":[{"label":"string","box_2d":[ymin,xmin,ymax,xmax]}],"safe_path":[{"label":"string","box_2d":[ymin,xmin,ymax,xmax]}]}}
@@ -54,7 +57,7 @@ export const analyzeFrame = async (base64Image: string, language: string = 'Engl
     const langInstruction = `Output in ${language}.`;
     const prompt = customPrompt 
       ? `${customPrompt} ${langInstruction}`
-      : `Scan hazards. ${langInstruction}`;
+      : `Perform deep reasoning: Check safety, read signs, find safe path. ${langInstruction}`;
     
     // USING GEMINI 3 PRO as requested
     const response = await ai.models.generateContent({
