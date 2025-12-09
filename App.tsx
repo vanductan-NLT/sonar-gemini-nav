@@ -48,6 +48,7 @@ const App: React.FC = () => {
   // Refs
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const processingCanvasRef = useRef<HTMLCanvasElement>(null); // Hidden canvas for resizing
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const isProcessingRef = useRef(false); // For logic checks (prevents re-render loops)
@@ -65,9 +66,9 @@ const App: React.FC = () => {
     if (!useHighQuality && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 1.1; // Slightly lowered from 1.3 for clearer, more natural speech
+      utterance.rate = 1.2; 
       utterance.pitch = 1.0;
-      utterance.lang = currentLang.locale; // Set correct locale
+      utterance.lang = currentLang.locale; 
       window.speechSynthesis.speak(utterance);
       return;
     }
@@ -102,12 +103,7 @@ const App: React.FC = () => {
   const selectLanguage = (index: number) => {
     setLangIndex(index);
     setShowLangList(false);
-    // Use a timeout to ensure the state update has processed if needed, 
-    // though passing the specific lang to speak() would be safer if we refactored speak().
-    // For now, we rely on the updated state re-render or just speak the name which is locale-agnostic enough.
     const newLang = LANGUAGES[index];
-    
-    // Announce language change (using standard synthesis for speed)
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(newLang.name);
     utterance.lang = newLang.locale;
@@ -139,32 +135,26 @@ const App: React.FC = () => {
        const w = ((xmax - xmin) / 1000) * canvas.width;
        const h = ((ymax - ymin) / 1000) * canvas.height;
 
-       // 1. Draw Fill (Semi-transparent)
        ctx.globalAlpha = fillOpacity;
        ctx.fillStyle = color;
        ctx.fillRect(x, y, w, h);
        ctx.globalAlpha = 1.0;
 
-       // 2. Draw Bounding Box Border
        ctx.strokeStyle = color;
        ctx.lineWidth = 3;
        ctx.strokeRect(x, y, w, h);
 
-       // 3. Draw Corner Accents (Tech Look)
+       // Tech corners
        const lineLen = Math.min(w, h) * 0.2;
        ctx.lineWidth = 5;
        ctx.beginPath(); 
-       // TL
        ctx.moveTo(x, y + lineLen); ctx.lineTo(x, y); ctx.lineTo(x + lineLen, y);
-       // TR
        ctx.moveTo(x + w - lineLen, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + lineLen);
-       // BR
        ctx.moveTo(x + w, y + h - lineLen); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - lineLen, y + h);
-       // BL
        ctx.moveTo(x + lineLen, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - lineLen);
        ctx.stroke();
 
-       // 4. Label Calculations
+       // Label
        const fontSize = 14;
        ctx.font = `bold ${fontSize}px Courier New`;
        const text = label.toUpperCase();
@@ -175,44 +165,22 @@ const App: React.FC = () => {
        const labelHeight = fontSize + (paddingY * 2);
        const labelWidth = textWidth + (paddingX * 2);
        
-       // 5. Smart Positioning Logic
-       // Constraint 1: Horizontal Safety
        let labelX = x;
-       // Prevent overflowing right edge
-       if (labelX + labelWidth > canvas.width) {
-          labelX = canvas.width - labelWidth;
-       }
-       // Prevent overflowing left edge
-       if (labelX < 0) {
-          labelX = 0;
-       }
+       if (labelX + labelWidth > canvas.width) labelX = canvas.width - labelWidth;
+       if (labelX < 0) labelX = 0;
 
-       // Constraint 2: Vertical Safety
-       // Prefer placing label ABOVE the box
        let labelY = y - labelHeight; 
+       if (labelY < 0) labelY = y;
+       if (labelY + labelHeight > canvas.height) labelY = canvas.height - labelHeight;
 
-       // If top placement goes off-screen, place INSIDE at the top
-       if (labelY < 0) {
-         labelY = y;
-       }
-       
-       // If we are really close to bottom edge (rare for top-of-box coord), ensure we don't clip bottom
-       if (labelY + labelHeight > canvas.height) {
-           labelY = canvas.height - labelHeight;
-       }
-
-       // 6. Draw Label Background
        ctx.fillStyle = color;
-       // Add shadow for better legibility against video
        ctx.shadowColor = "rgba(0,0,0,0.8)";
        ctx.shadowBlur = 4;
        ctx.fillRect(labelX, labelY, labelWidth, labelHeight);
-       ctx.shadowBlur = 0; // Reset
+       ctx.shadowBlur = 0; 
        
-       // 7. Draw Label Text
        ctx.fillStyle = "#000000";
        ctx.textBaseline = 'middle';
-       // Center text vertically in the label box
        ctx.fillText(text, labelX + paddingX, labelY + (labelHeight / 2) + 1);
     };
 
@@ -221,20 +189,18 @@ const App: React.FC = () => {
     }
     if (lastResponse.visual_debug?.safe_path) {
       lastResponse.visual_debug.safe_path.forEach(p => {
-        // Ensure "SAFE PATH" label is used if model returns generic "Path" or empty, but allow localized labels (e.g. Camino) to pass through
         let label = p.label || 'SAFE PATH';
         if (label.toUpperCase() === 'PATH') label = 'SAFE PATH';
-        drawBox(p.box_2d, '#00FF66', label, 0.3); // Higher opacity (0.3) for clear visibility
+        drawBox(p.box_2d, '#00FF66', label, 0.3);
       });
     }
 
-    // --- Stereo Pan Visualizer (Visual Feedback for Judges) ---
+    // --- Stereo Pan Visualizer ---
     const pan = lastResponse.stereo_pan;
-    const centerY = canvas.height * 0.93; // Position at bottom (93% height)
+    const centerY = canvas.height * 0.93; 
     const centerX = canvas.width / 2;
-    const barWidth = canvas.width * 0.6; // 60% of width
+    const barWidth = canvas.width * 0.6; 
     
-    // 1. Draw Track
     ctx.beginPath();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
     ctx.lineWidth = 4;
@@ -243,7 +209,6 @@ const App: React.FC = () => {
     ctx.lineTo(centerX + barWidth/2, centerY);
     ctx.stroke();
 
-    // 2. Draw Center Tick (Reference)
     ctx.beginPath();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.lineWidth = 2;
@@ -251,7 +216,6 @@ const App: React.FC = () => {
     ctx.lineTo(centerX, centerY + 10);
     ctx.stroke();
 
-    // 3. Draw Ends (L/R)
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     ctx.font = 'bold 12px Courier New';
     ctx.textBaseline = 'middle';
@@ -260,25 +224,21 @@ const App: React.FC = () => {
     ctx.textAlign = 'left';
     ctx.fillText('R', centerX + barWidth/2 + 10, centerY);
 
-    // 4. Calculate Indicator Position
     const clampedPan = Math.max(-1, Math.min(1, pan));
     const indicatorX = centerX + (clampedPan * (barWidth / 2));
     
-    // Determine Color
-    let indicatorColor = '#00FF66'; // Safe
+    let indicatorColor = '#00FF66'; 
     if (lastResponse.safety_status === 'CAUTION') indicatorColor = '#FFD700';
     if (lastResponse.safety_status === 'STOP') indicatorColor = '#FF3333';
 
-    // 5. Draw Indicator (Glowing Dot)
     ctx.shadowColor = indicatorColor;
     ctx.shadowBlur = 15;
     ctx.fillStyle = indicatorColor;
     ctx.beginPath();
     ctx.arc(indicatorX, centerY, 8, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0; // Reset
+    ctx.shadowBlur = 0;
 
-    // 6. Draw Value Text
     ctx.fillStyle = indicatorColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -287,47 +247,69 @@ const App: React.FC = () => {
 
   }, [lastResponse]);
 
-  // --- Navigation Loop ---
+  // --- Navigation Loop (Recursive) ---
   const runNavigationLoop = useCallback(async () => {
-    // Check ref instead of state to avoid dependency cycles
+    // Stop condition: Not scanning, or processing lock, or invalid webcam
     if (appState !== AppState.SCANNING || isProcessingRef.current || !webcamRef.current || emergencyLatch) return;
 
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (!imageSrc) return;
+    const video = webcamRef.current.video;
+    if (!video || video.readyState !== 4) {
+        // Retry shortly if video not ready
+        requestAnimationFrame(() => runNavigationLoop());
+        return;
+    }
 
-    // Set both ref and state
+    // Lock processing
     isProcessingRef.current = true;
     setIsProcessingState(true);
 
-    const base64Image = imageSrc.split(',')[1];
+    let base64Image = "";
+
+    // 1. Resize and Optimize Image
+    if (processingCanvasRef.current) {
+        const pCtx = processingCanvasRef.current.getContext('2d');
+        if (pCtx) {
+            // Draw 512x512 for optimal AI input speed
+            pCtx.drawImage(video, 0, 0, 512, 512);
+            // Export low quality JPEG
+            base64Image = processingCanvasRef.current.toDataURL('image/jpeg', 0.6).split(',')[1];
+        }
+    }
+
+    // Fallback
+    if (!base64Image) {
+        const src = webcamRef.current.getScreenshot();
+        if (src) base64Image = src.split(',')[1];
+    }
+
+    if (!base64Image) {
+        isProcessingRef.current = false;
+        setIsProcessingState(false);
+        requestAnimationFrame(() => runNavigationLoop());
+        return;
+    }
 
     try {
-      // Pass current language name to analysis
       const data = await analyzeFrame(base64Image, currentLang.name);
       setLastResponse(data);
       
-      // Calculate word count to ensure conciseness
       const combinedText = data.reasoning_summary 
         ? `${data.navigation_command}. ${data.reasoning_summary}`
         : data.navigation_command;
       
       const wordCount = combinedText.split(/\s+/).filter(w => w.length > 0).length;
-
-      // Logic: Speak full message if short, otherwise just command
       const voiceMessage = (wordCount <= 10 && data.reasoning_summary) 
         ? combinedText 
         : data.navigation_command;
 
       if (data.safety_status === 'STOP') {
-        setEmergencyLatch(true); // Latch emergency mode
-        playBeep(1000, 500, 'sawtooth'); // Alarm sound
+        setEmergencyLatch(true);
+        playBeep(1000, 500, 'sawtooth');
         speak(voiceMessage, false);
       } else if (data.safety_status === 'CAUTION') {
-        // Distinct sound for caution (Double pulse, lower pitch)
         playCautionSound(data.stereo_pan);
         speak(voiceMessage, false);
       } else {
-        // Safe status: Standard high-pitch ping
         playSonarPing(data.stereo_pan);
         speak(voiceMessage, false);
       }
@@ -335,25 +317,33 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Loop Error", error);
     } finally {
-      // Ensure state is cleared even if analysis fails
+      // Release Lock
       isProcessingRef.current = false;
       setIsProcessingState(false);
+      
+      // RECURSIVE CALL: Schedule next frame immediately via AnimationFrame
+      // This is the fastest possible loop that respects browser painting
+      if (appState === AppState.SCANNING && !emergencyLatch) {
+         requestAnimationFrame(() => runNavigationLoop()); 
+      }
     }
   }, [appState, speak, emergencyLatch, currentLang.name]);
 
+  // Start Loop Trigger
   useEffect(() => {
-    let intervalId: any;
-    // Only run loop if scanning AND not in emergency mode
     if (appState === AppState.SCANNING && !emergencyLatch) {
       runNavigationLoop();
-      intervalId = setInterval(runNavigationLoop, 3500); 
     }
-    return () => clearInterval(intervalId);
-  }, [appState, runNavigationLoop, emergencyLatch]);
+    // Cleanup ensures we don't leave processing states stuck if component unmounts
+    return () => {
+        isProcessingRef.current = false;
+        setIsProcessingState(false);
+    };
+  }, [appState, emergencyLatch, runNavigationLoop]);
 
   // --- Input ---
   const startListening = async () => {
-    if (emergencyLatch) return; // Disable voice input during emergency
+    if (emergencyLatch) return;
     if (appState === AppState.SCANNING) setAppState(AppState.IDLE);
     setAppState(AppState.LISTENING);
     playBeep(600, 100);
@@ -367,11 +357,7 @@ const App: React.FC = () => {
       
       mediaRecorderRef.current.onstop = async () => {
         try {
-          // Verify we have audio data
-          if (audioChunksRef.current.length === 0) {
-            console.warn("No audio recorded");
-            return;
-          }
+          if (audioChunksRef.current.length === 0) return;
           
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
           const base64Audio = await blobToBase64(audioBlob);
@@ -379,7 +365,6 @@ const App: React.FC = () => {
           setAppState(AppState.PROCESSING_QUERY);
           setIsProcessingState(true);
           
-          // Pass current language name to transcription
           const query = await transcribeAudio(base64Audio, currentLang.name);
           
           if (query && webcamRef.current) {
@@ -387,7 +372,6 @@ const App: React.FC = () => {
             if (imageSrc) {
                const base64Image = imageSrc.split(',')[1];
                speak("Processing", false);
-               // Pass current language name to analysis
                const response = await analyzeFrame(base64Image, currentLang.name, `User asked: "${query}". Answer strictly based on the visual input. Be helpful.`);
                setLastResponse(response);
                speak(response.navigation_command + " " + response.reasoning_summary, true);
@@ -399,7 +383,6 @@ const App: React.FC = () => {
           console.error("Voice Processing Error", error);
           speak("Error processing command", false);
         } finally {
-          // Crucial: Reset state to IDLE in all cases
           setAppState(AppState.IDLE);
           setIsProcessingState(false);
         }
@@ -421,7 +404,6 @@ const App: React.FC = () => {
 
   const toggleNavigation = () => {
     initAudio();
-    // If in emergency latch, this button acts as RESET
     if (emergencyLatch) {
       setEmergencyLatch(false);
       setAppState(AppState.IDLE);
@@ -440,7 +422,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- UI Helpers ---
   const getStatusColor = () => {
     if (emergencyLatch) return 'text-sonar-alert';
     if (lastResponse?.safety_status === 'STOP') return 'text-sonar-alert';
@@ -454,7 +435,6 @@ const App: React.FC = () => {
     return '';
   };
 
-  // Directional Indicator Helper
   const renderDirectionIndicator = () => {
     if (emergencyLatch) return <div className="text-8xl font-black text-white animate-pulse">STOP</div>;
     if (!lastResponse || appState !== AppState.SCANNING) return null;
@@ -472,6 +452,9 @@ const App: React.FC = () => {
   return (
     <div className={`relative h-screen w-screen bg-grid overflow-hidden font-sans select-none transition-colors duration-200 ${getAlertBg()}`}>
       
+      {/* Hidden processing canvas */}
+      <canvas ref={processingCanvasRef} width={512} height={512} className="hidden" />
+
       {/* Language List Overlay */}
       {showLangList && (
         <div className="absolute inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-6 backdrop-blur-md animate-in fade-in duration-200">
@@ -504,8 +487,12 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* 1. Viewport Layer */}
-      <div className={`absolute inset-4 z-0 border-2 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black ${emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 'border-zinc-800 bg-black'}`}>
+      {/* 1. Viewport Layer - Border pulses yellow during AI processing */}
+      <div className={`absolute inset-4 z-0 border-4 rounded-lg overflow-hidden flex items-center justify-center shadow-2xl shadow-black transition-colors duration-300 ${
+           emergencyLatch ? 'border-sonar-alert bg-red-900/20' : 
+           isProcessingState ? 'border-sonar-yellow animate-pulse bg-black' : 
+           'border-zinc-800 bg-black'
+      }`}>
          <Webcam
            ref={webcamRef}
            audio={false}
@@ -535,7 +522,6 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
                <h1 className="text-3xl font-black tracking-tighter text-sonar-white font-mono">SONAR<span className="text-sonar-yellow">.AI</span></h1>
                
-               {/* Language Toggle Button */}
                <button 
                  onClick={() => setShowLangList(true)}
                  className="bg-zinc-900/90 border border-zinc-700 text-sonar-yellow font-mono text-xs font-bold px-3 py-1 rounded hover:bg-zinc-800 active:scale-95 transition-all flex items-center gap-1 shadow-lg"
@@ -599,7 +585,6 @@ const App: React.FC = () => {
              <span className="text-xs font-mono">HOLD TO SPEAK</span>
            </button>
 
-           {/* Space */}
            <div className="col-span-1"></div>
 
            {/* Toggle Power */}
